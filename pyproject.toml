@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intellisense-slam"
+version = "0.1.0"
+description = "Starting point for GPS-denied SLAM and MAVLink external navigation on Jetson"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.21",
+  "opencv-python>=4.5",
+  "PyYAML>=5.4",
+  "pymavlink>=2.4.49",
+  "pyserial>=3.5",
+  "pyrealsense2",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

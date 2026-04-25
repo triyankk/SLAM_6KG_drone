@@ -1,0 +1,2 @@
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="23a3", ATTRS{serial}=="DCCEb114J19", SYMLINK+="jt16_usb", GROUP="dialout", MODE="0660"
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="imu_usb", GROUP="dialout", MODE="0660"

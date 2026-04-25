@@ -1,0 +1,13 @@
+[Unit]
+Description=JT26 JT16 LIDAR -> MAVLink DISTANCE_SENSOR publisher
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 __WORKDIR__/scripts/jt26_to_mavlink.py --jtport auto --mavport /dev/ttyACM1 --rate 5 --safety-m 2.0
+Restart=on-failure
+RestartSec=2
+User=__USER__
+
+[Install]
+WantedBy=multi-user.target

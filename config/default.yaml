@@ -1,0 +1,71 @@
+ports:
+  - /dev/ttyACM1
+  - /dev/ttyACM0
+baud: 115200
+source: standby
+rate_hz: 15.0
+csv_path: ""
+boot_delay_seconds: 60.0
+fc_setup:
+  enabled: true
+  slam_source_set: 3
+  idle_source_set: 1
+  switch_after_sends: 1
+  select_source_set_on_stream: true
+  activate_mode: POSHOLD
+  ready_min_quality: 60
+  require_rangefinder_height: true
+  ahrs_ekf_type: 3
+  avoid_enable: 7
+  avoid_margin_m: 2.0
+  ek2_enable: 0
+  ek3_enable: 1
+  ek3_src_options: 0
+  ek3_ogn_hgt_mask: 0
+  viso_type: 0
+  viso_pos_x_m: 0.0
+  viso_pos_y_m: 0.0
+  viso_pos_z_m: 0.0
+  viso_qual_min: 0
+  posxy_source: 6
+  velxy_source: 6
+  posz_source: 1
+  velz_source: 0
+  yaw_source: 1
+  prx1_type: 2
+obstacle:
+  enabled: true
+  lidar_enabled: true
+  lidar_port: auto
+  lidar_baud: 3000000
+  safety_distance_m: 2.0
+  publish_rate_hz: 5.0
+  sensor_id: 20
+  sector_count: 72
+  max_distance_m: 40.0
+  min_valid_distance_m: 0.8
+  filter_samples: 15
+qgc:
+  enabled: false
+  forward_host: 127.0.0.1
+  forward_port: 14550
+  bind_host: 0.0.0.0
+  bind_port: 14555
+gps_input:
+  enabled: false
+  gps_id: 1
+  origin_lat_deg: 0.0
+  origin_lon_deg: 0.0
+  origin_alt_m: 0.0
+  satellites_visible: 14
+  horiz_accuracy_m: 0.5
+  vert_accuracy_m: 1.0
+  speed_accuracy_m_s: 0.3
+lidar_steering:
+  enabled: false
+  trigger_distance_m: 2.0
+  clear_distance_m: 2.4
+  max_speed_m_s: 0.5
+  angle_offset_deg: 0.0
+  allowed_modes:
+  - GUIDED
