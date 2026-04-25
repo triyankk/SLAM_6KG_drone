@@ -24,6 +24,7 @@ class ExternalImuProbe:
     frame_count: int
     byte_count: int
     nonzero_ratio: float
+    orientation_ready: bool = False
 
 
 @dataclass
@@ -227,19 +228,35 @@ def probe_baud(port: str, baud_candidates: list[int], scan_seconds: float) -> Ex
         finally:
             ser.close()
 
-        frame_count = len(extract_frames(bytearray(collected)))
+        state = _TelemetryState()
+        parsed_buffer = bytearray(collected)
+        parsed_frames = extract_frames(parsed_buffer)
+        for frame in parsed_frames:
+            update_state(frame, state)
+        sample = imu_sample_from_state(state)
         probe = ExternalImuProbe(
             port=port,
             baud=baud,
-            frame_count=frame_count,
+            frame_count=len(parsed_frames),
             byte_count=len(collected),
             nonzero_ratio=nonzero_ratio(bytes(collected[:160])),
+            orientation_ready=sample is not None,
         )
         if best is None:
             best = probe
             continue
-        score = (probe.frame_count, probe.nonzero_ratio, probe.byte_count)
-        best_score = (best.frame_count, best.nonzero_ratio, best.byte_count)
+        score = (
+            int(probe.orientation_ready),
+            probe.frame_count,
+            probe.nonzero_ratio,
+            probe.byte_count,
+        )
+        best_score = (
+            int(best.orientation_ready),
+            best.frame_count,
+            best.nonzero_ratio,
+            best.byte_count,
+        )
         if score > best_score:
             best = probe
 

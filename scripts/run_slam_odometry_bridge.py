@@ -14,19 +14,36 @@ if str(SRC_ROOT) not in sys.path:
 
 from intellisense_slam.external_imu import Im10aReader, apply_imu_sample_to_pose
 from intellisense_slam.bridge_config import SlamBridgeConfig, load_bridge_config
+from intellisense_slam.calibration import (
+    CalibrationAccumulator,
+    CalibrationProfile,
+    apply_calibration_profile,
+    load_calibration_profile,
+    pose_yaw_deg,
+    save_calibration_profile,
+)
 from intellisense_slam.fc_config import (
     BRIDGE_STATE_JETSON_BOOT,
+    BRIDGE_STATE_SENSOR_CHECK_PASSED,
     BRIDGE_STATE_SLAM_STARTED,
     BRIDGE_STATE_SOURCE_SET_ACTIVE,
+    BRIDGE_STATE_POSHOLD_READY,
+    BRIDGE_STATE_CALIBRATION_ACTIVE,
+    BRIDGE_STATE_CALIBRATION_COMPLETE_RTL,
+    BRIDGE_STATE_SLAM_FLIGHT_ACTIVE,
     BRIDGE_STATE_SOURCE_SWITCH_FAILED,
     BRIDGE_STATE_SOURCE_SWITCH_NO_ACK,
     FlightControllerTelemetry,
     apply_fc_setup,
     configure_telemetry_streams,
     drain_fc_telemetry,
+    gps_reference_valid,
     publish_bridge_state,
     rangefinder_height_valid,
+    recent_status_blocks_slam,
     request_active_source_set,
+    send_calibration_active_beeps,
+    send_calibration_complete_beeps,
     send_distance_sensor,
     send_gcs_event,
     send_gps_input_from_pose,
@@ -34,7 +51,11 @@ from intellisense_slam.fc_config import (
     send_body_velocity_nudge,
     send_companion_heartbeat,
     send_ready_beeps,
+    send_sensor_check_beep,
+    send_slam_flight_ping,
+    send_startup_beeps,
     send_statustext,
+    set_vehicle_mode,
     set_ekf_source_set,
 )
 from intellisense_slam.lidar import LidarReader
@@ -225,7 +246,6 @@ def ensure_fc_setup(connection, config: SlamBridgeConfig) -> None:
     if not config.fc_setup.enabled:
         return
 
-    publish_bridge_state(connection.master, BRIDGE_STATE_JETSON_BOOT, 0)
     report = apply_fc_setup(connection.master, config.fc_setup)
     if report.changed:
         changed_summary = ", ".join(f"{item.name}={item.new_value:g}" for item in report.changed)
@@ -291,33 +311,137 @@ def slam_poshold_ready(
     pose,
     fc_state: FlightControllerTelemetry,
     config: SlamBridgeConfig,
+    calibration_profile: CalibrationProfile,
 ) -> bool:
-    if not mode_wants_slam(fc_state, config):
-        return False
-    if fc_state.active_source_set != config.fc_setup.slam_source_set:
-        return False
-    if pose.pose_quality < config.fc_setup.ready_min_quality:
-        return False
+    return (
+        mode_wants_slam(fc_state, config)
+        and fc_state.active_source_set == config.fc_setup.slam_source_set
+        and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile)
+    )
+
+
+def quaternion_norm(pose) -> float:
+    return math.sqrt(pose.qw * pose.qw + pose.qx * pose.qx + pose.qy * pose.qy + pose.qz * pose.qz)
+
+
+def pose_safe_for_fc(
+    pose,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+    min_quality: int | None = None,
+) -> bool:
+    if min_quality is None:
+        min_quality = max(35, min(config.fc_setup.ready_min_quality, 45))
     if not pose.tracking_state.startswith("ok"):
         return False
-    if config.fc_setup.require_rangefinder_height and not rangefinder_height_valid(fc_state):
+    if pose.pose_quality < min_quality:
+        return False
+    if not all(
+        math.isfinite(value)
+        for value in (
+            pose.x_m,
+            pose.y_m,
+            pose.z_m,
+            pose.vx_m_s,
+            pose.vy_m_s,
+            pose.vz_m_s,
+            pose.qw,
+            pose.qx,
+            pose.qy,
+            pose.qz,
+        )
+    ):
+        return False
+    if not 0.7 <= quaternion_norm(pose) <= 1.3:
+        return False
+    speed_m_s = math.sqrt(pose.vx_m_s * pose.vx_m_s + pose.vy_m_s * pose.vy_m_s + pose.vz_m_s * pose.vz_m_s)
+    if speed_m_s > 8.0:
+        return False
+    if config.fc_setup.require_rangefinder_height:
+        if not rangefinder_height_valid(fc_state):
+            return False
+        if abs(abs(pose.z_m) - float(fc_state.rangefinder_distance_m or 0.0)) > 1.0:
+            return False
+    return True
+
+
+def sensor_quick_check_ok(
+    pose,
+    imu_sample,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+) -> bool:
+    if config.imu_enabled and imu_sample is None:
+        return False
+    return pose_safe_for_fc(pose, fc_state, config, min_quality=max(40, config.calibration.min_pose_quality - 10))
+
+
+def bridge_ready_for_poshold(
+    pose,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+    calibration_profile: CalibrationProfile,
+) -> bool:
+    if not calibration_profile.valid:
+        return False
+    if not pose_safe_for_fc(pose, fc_state, config, min_quality=config.fc_setup.ready_min_quality):
+        return False
+    if recent_status_blocks_slam(fc_state):
         return False
     return True
 
 
-def maybe_start_flowhold_calibration(fc_state: FlightControllerTelemetry, last_mode: str, running_process):
-    if fc_state.flight_mode != "FLOWHOLD" or last_mode == "FLOWHOLD" or running_process is not None:
-        return running_process
-
-    script = REPO_ROOT / "scripts" / "run_slam_sensor_calibration.py"
-    if not script.exists():
-        return None
-    return subprocess.Popen(  # noqa: S603
-        [sys.executable, str(script), "--duration", "12"],
-        cwd=str(REPO_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+def calibration_profile_stable(profile: CalibrationProfile) -> bool:
+    return (
+        profile.valid
+        and profile.sample_count > 0
+        and profile.yaw_std_deg <= 10.0
+        and profile.x_std_m <= 0.75
+        and profile.y_std_m <= 0.75
     )
+
+
+def calibration_block_reason(
+    raw_pose,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+) -> str | None:
+    if not fc_state.armed:
+        return "vehicle is not armed"
+    if not gps_reference_valid(
+        fc_state,
+        min_fix_type=config.calibration.min_gps_fix_type,
+        min_satellites=config.calibration.min_gps_satellites,
+    ):
+        return "GPS reference is not healthy enough"
+    if fc_state.local_position is None or fc_state.attitude is None:
+        return "FC local position or attitude telemetry is missing"
+    if recent_status_blocks_slam(fc_state):
+        return f"FC warning active: {fc_state.status_text or 'status text'}"
+    if not pose_safe_for_fc(raw_pose, fc_state, config, min_quality=config.calibration.min_pose_quality):
+        return "SLAM pose is not stable enough yet"
+
+    speed_xy_m_s = math.hypot(
+        float(getattr(fc_state.local_position, "vx", 0.0)),
+        float(getattr(fc_state.local_position, "vy", 0.0)),
+    )
+    if speed_xy_m_s > config.calibration.max_horizontal_speed_m_s:
+        return f"vehicle still moving at {speed_xy_m_s:.2f}m/s"
+
+    roll_deg = math.degrees(float(getattr(fc_state.attitude, "roll", 0.0)))
+    pitch_deg = math.degrees(float(getattr(fc_state.attitude, "pitch", 0.0)))
+    if abs(roll_deg) > config.calibration.max_roll_deg or abs(pitch_deg) > config.calibration.max_pitch_deg:
+        return f"vehicle not level enough roll={roll_deg:+.1f} pitch={pitch_deg:+.1f}"
+    return None
+
+
+def active_slam_flight(
+    pose,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+    calibration_profile: CalibrationProfile,
+) -> bool:
+    return fc_state.armed and slam_poshold_ready(pose, fc_state, config, calibration_profile)
 
 
 def compute_lidar_body_nudge(snapshot, config):
@@ -451,6 +575,16 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         send_gcs_event(connection.master, "bridge linked; waiting for SLAM odometry readiness")
         configure_telemetry_streams(connection.master)
         fc_state = FlightControllerTelemetry(active_source_set=request_active_source_set(connection.master))
+        calibration_profile = (
+            load_calibration_profile(config.calibration.profile_path)
+            if config.calibration.profile_path
+            else CalibrationProfile()
+        )
+        calibration_accumulator = CalibrationAccumulator(
+            mode_name=config.calibration.mode,
+            duration_s=config.calibration.duration_s,
+            min_samples=config.calibration.min_samples,
+        )
         last_switch_attempt_s = 0.0
         last_release_attempt_s = 0.0
         last_heartbeat_s = 0.0
@@ -459,9 +593,19 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         gps_input_origin_missing_announced = False
         steering_inside = False
         obstacle_inside = False
-        slam_ready_last = False
+        mavlink_detected_s = time.time()
+        startup_announced = False
+        quick_check_announced = False
+        ready_announced = False
+        slam_flight_active_last = False
+        last_slam_flight_beep_s = 0.0
+        last_slam_flight_message_s = 0.0
+        calibration_active_announced = False
+        calibration_complete_this_mode = False
+        calibration_last_block_reason = ""
+        calibration_last_block_s = 0.0
+        latest_imu_sample = None
         last_mode = fc_state.flight_mode
-        calibration_process = None
         source_started_published = False
         print(
             "Sending ODOMETRY to Cube:"
@@ -473,7 +617,17 @@ def run_bridge(config: SlamBridgeConfig) -> None:
             f" lidar={'off' if lidar_reader is None else f'{lidar_reader.port}@{lidar_reader.baud}'}"
             f" qgc={'off' if qgc_bridge is None else f'udpout:{config.qgc.forward_host}:{config.qgc.forward_port}/udpin:{config.qgc.bind_port}'}"
             f" slam_source_set={config.fc_setup.slam_source_set}"
+            f" calibration_mode={config.calibration.mode}"
         )
+        if calibration_profile.valid:
+            print(
+                "Loaded SLAM calibration:"
+                f" yaw_off={calibration_profile.yaw_offset_deg:+.2f}deg"
+                f" xy_off=({calibration_profile.x_offset_m:+.2f},{calibration_profile.y_offset_m:+.2f})m"
+                f" samples={calibration_profile.sample_count}"
+            )
+        else:
+            print("No saved SLAM calibration profile yet; BRAKE mode calibration is required before PosHold-ready can be declared.")
 
         try:
             while True:
@@ -486,23 +640,31 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                     source.set_external_height_m(
                         fc_state.rangefinder_distance_m if rangefinder_height_valid(fc_state) else None
                     )
-                pose = source.sample()
+                raw_pose = source.sample()
                 if imu_reader is not None:
                     imu_sample = imu_reader.poll(duration_s=min(0.02, period_s))
                     if imu_sample is not None:
-                        pose = apply_imu_sample_to_pose(pose, imu_sample)
-                pose = apply_cube_rangefinder_height(pose, fc_state, config)
+                        latest_imu_sample = imu_sample
+                        raw_pose = apply_imu_sample_to_pose(raw_pose, imu_sample)
+                raw_pose = apply_cube_rangefinder_height(raw_pose, fc_state, config)
+                pose = apply_calibration_profile(raw_pose, calibration_profile)
 
                 slam_mode_requested = mode_wants_slam(fc_state, config)
+                pose_safe_now = pose_safe_for_fc(pose, fc_state, config)
+                quick_check_now = sensor_quick_check_ok(pose, latest_imu_sample, fc_state, config)
+                bridge_ready_now = bridge_ready_for_poshold(pose, fc_state, config, calibration_profile)
+                slam_ready_now = slam_poshold_ready(pose, fc_state, config, calibration_profile)
+                slam_flight_active_now = active_slam_flight(pose, fc_state, config, calibration_profile)
+
                 if not slam_mode_requested and sent_count > 0:
                     sent_count = 0
                     source_started_published = False
                     gps_input_ready_announced = False
                     gps_input_origin_missing_announced = False
 
-                if slam_mode_requested:
+                if slam_mode_requested and pose_safe_now:
                     send_odometry(connection, pose)
-                if config.gps_input.enabled and slam_mode_requested:
+                if config.gps_input.enabled and slam_mode_requested and pose_safe_now:
                     sent_gps_input = send_gps_input_from_pose(connection.master, pose, config.gps_input)
                     if sent_gps_input and not gps_input_ready_announced:
                         send_gcs_event(
@@ -517,13 +679,37 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                             severity=4,
                         )
                         gps_input_origin_missing_announced = True
-                if slam_mode_requested:
+                if slam_mode_requested and pose_safe_now:
                     sent_count += 1
                 now_s = time.time()
                 if now_s - last_heartbeat_s >= 1.0:
                     send_companion_heartbeat(connection.master)
                     last_heartbeat_s = now_s
-                if slam_mode_requested and not source_started_published:
+                if not startup_announced and now_s - mavlink_detected_s >= 60.0:
+                    send_startup_beeps(connection.master)
+                    send_gcs_event(connection.master, "Jetson SLAM bridge initiated")
+                    publish_bridge_state(connection.master, BRIDGE_STATE_JETSON_BOOT, 0)
+                    startup_announced = True
+
+                if startup_announced and quick_check_now and not quick_check_announced:
+                    send_sensor_check_beep(connection.master)
+                    send_gcs_event(connection.master, "Sensor quick check passed")
+                    publish_bridge_state(connection.master, BRIDGE_STATE_SENSOR_CHECK_PASSED, 0)
+                    quick_check_announced = True
+
+                if startup_announced and bridge_ready_now and not ready_announced:
+                    send_ready_beeps(connection.master)
+                    send_gcs_event(connection.master, "SLAM ready for PosHold")
+                    publish_bridge_state(
+                        connection.master,
+                        BRIDGE_STATE_POSHOLD_READY,
+                        config.fc_setup.slam_source_set,
+                    )
+                    ready_announced = True
+                elif not bridge_ready_now:
+                    ready_announced = False
+
+                if slam_mode_requested and pose_safe_now and not source_started_published:
                     publish_bridge_state(
                         connection.master,
                         BRIDGE_STATE_SLAM_STARTED,
@@ -580,21 +766,104 @@ def run_bridge(config: SlamBridgeConfig) -> None:
 
                 if fc_state.flight_mode != last_mode:
                     send_gcs_event(connection.master, f"flight mode {fc_state.flight_mode}")
-                    calibration_process = maybe_start_flowhold_calibration(fc_state, last_mode, calibration_process)
-                    if calibration_process is not None and fc_state.flight_mode == "FLOWHOLD":
-                        send_gcs_event(connection.master, "FLOWHOLD triggered sensor calibration capture")
+                    if fc_state.flight_mode == config.calibration.mode and config.calibration.enabled:
+                        send_gcs_event(
+                            connection.master,
+                            f"{config.calibration.mode} selected; waiting for calibration preconditions",
+                        )
+                        calibration_complete_this_mode = False
+                    else:
+                        calibration_accumulator.reset()
+                        calibration_active_announced = False
+                        calibration_last_block_reason = ""
                     if fc_state.flight_mode == "POSHOLD":
                         send_gcs_event(connection.master, "POSHOLD selected; waiting for SLAM readiness")
                     last_mode = fc_state.flight_mode
-                if calibration_process is not None and calibration_process.poll() is not None:
-                    send_gcs_event(connection.master, "sensor calibration capture finished")
-                    calibration_process = None
+
+                if (
+                    config.calibration.enabled
+                    and fc_state.flight_mode == config.calibration.mode
+                    and not calibration_complete_this_mode
+                ):
+                    calibration_reason = calibration_block_reason(raw_pose, fc_state, config)
+                    if calibration_reason is None:
+                        if not calibration_accumulator.active():
+                            calibration_accumulator.start()
+                        if not calibration_active_announced:
+                            send_calibration_active_beeps(connection.master)
+                            send_gcs_event(
+                                connection.master,
+                                f"{config.calibration.mode} calibration active",
+                            )
+                            publish_bridge_state(connection.master, BRIDGE_STATE_CALIBRATION_ACTIVE, 0)
+                            calibration_active_announced = True
+                        calibration_accumulator.collect(
+                            reference_x_m=float(getattr(fc_state.local_position, "x", 0.0)),
+                            reference_y_m=float(getattr(fc_state.local_position, "y", 0.0)),
+                            reference_yaw_deg=math.degrees(float(getattr(fc_state.attitude, "yaw", 0.0))),
+                            range_m=float(fc_state.rangefinder_distance_m or 0.0),
+                            pose=raw_pose,
+                        )
+                        if calibration_accumulator.ready() and not calibration_complete_this_mode:
+                            candidate_profile = calibration_accumulator.build_profile()
+                            if calibration_profile_stable(candidate_profile):
+                                if config.calibration.profile_path:
+                                    save_calibration_profile(config.calibration.profile_path, candidate_profile)
+                                calibration_profile = candidate_profile
+                                calibration_complete_this_mode = True
+                                send_calibration_complete_beeps(connection.master)
+                                send_gcs_event(
+                                    connection.master,
+                                    "Calibration complete, switching to RTL",
+                                )
+                                publish_bridge_state(
+                                    connection.master,
+                                    BRIDGE_STATE_CALIBRATION_COMPLETE_RTL,
+                                    0,
+                                )
+                                calibration_accumulator.reset()
+                                calibration_active_announced = False
+                                if config.calibration.auto_rtl_after_complete:
+                                    rtl_result = set_vehicle_mode(connection.master, "RTL")
+                                    if rtl_result is True:
+                                        send_gcs_event(connection.master, "RTL command accepted after calibration")
+                                    else:
+                                        send_gcs_event(
+                                            connection.master,
+                                            "Calibration saved, but RTL mode change did not confirm",
+                                            severity=4,
+                                        )
+                            else:
+                                send_gcs_event(
+                                    connection.master,
+                                    "Calibration sample was noisy; holding BRAKE and retrying",
+                                    severity=4,
+                                )
+                                calibration_accumulator.start()
+                                calibration_active_announced = False
+                    else:
+                        if calibration_accumulator.active():
+                            calibration_accumulator.reset()
+                            calibration_active_announced = False
+                        if (
+                            calibration_reason != calibration_last_block_reason
+                            or now_s - calibration_last_block_s >= 5.0
+                        ):
+                            send_gcs_event(
+                                connection.master,
+                                f"{config.calibration.mode} calibration waiting: {calibration_reason}",
+                                severity=4,
+                            )
+                            calibration_last_block_reason = calibration_reason
+                            calibration_last_block_s = now_s
 
                 should_switch = (
                     config.fc_setup.enabled
                     and config.fc_setup.select_source_set_on_stream
                     and config.fc_setup.slam_source_set > 0
                     and slam_mode_requested
+                    and bridge_ready_now
+                    and pose_safe_now
                     and sent_count >= max(config.fc_setup.switch_after_sends, 1)
                     and fc_state.active_source_set != config.fc_setup.slam_source_set
                 )
@@ -655,11 +924,20 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                             f"SLAM released; source {config.fc_setup.idle_source_set} restored",
                         )
 
-                slam_ready_now = slam_poshold_ready(pose, fc_state, config)
-                if slam_ready_now and not slam_ready_last:
-                    send_ready_beeps(connection.master)
-                    send_gcs_event(connection.master, "GPS-less PosHold ready")
-                slam_ready_last = slam_ready_now
+                if slam_flight_active_now:
+                    if not slam_flight_active_last:
+                        publish_bridge_state(
+                            connection.master,
+                            BRIDGE_STATE_SLAM_FLIGHT_ACTIVE,
+                            config.fc_setup.slam_source_set,
+                        )
+                    if now_s - last_slam_flight_beep_s >= 6.0:
+                        send_slam_flight_ping(connection.master)
+                        last_slam_flight_beep_s = now_s
+                    if now_s - last_slam_flight_message_s >= 10.0:
+                        send_gcs_event(connection.master, "SLAM flight active")
+                        last_slam_flight_message_s = now_s
+                slam_flight_active_last = slam_flight_active_now
 
                 if now_s - last_status_s >= max(config.status_log_seconds, 1.0):
                     elapsed_s = max(now_s - started_s, 1e-6)
@@ -670,6 +948,13 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                         extra += f" ekf_flags={fc_state.ekf_flags}"
                     if fc_state.rangefinder_distance_m is not None:
                         extra += f" rng={fc_state.rangefinder_distance_m:.2f}m"
+                    if calibration_profile.valid:
+                        extra += (
+                            f" cal_yaw={calibration_profile.yaw_offset_deg:+.1f}"
+                            f" cal_xy=({calibration_profile.x_offset_m:+.2f},{calibration_profile.y_offset_m:+.2f})"
+                        )
+                    if fc_state.gps_fix_type is not None:
+                        extra += f" gps_fix={fc_state.gps_fix_type}/{fc_state.gps_satellites or 0}"
                     print(
                         "SLAM bridge:"
                         f" source={config.source}"
@@ -681,6 +966,8 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                         f" fc_source={fc_state.active_source_set or 'unknown'}"
                         f" mode={fc_state.flight_mode}"
                         f" slam_mode={'on' if slam_mode_requested else 'off'}"
+                        f" pose_safe={'yes' if pose_safe_now else 'no'}"
+                        f" quick={'yes' if quick_check_now else 'no'}"
                         f" ready={'yes' if slam_ready_now else 'no'}"
                         f" pose_q={pose.pose_quality}"
                         f" track={pose.tracking_state}"

@@ -59,10 +59,17 @@ class FlightControllerSetupReport:
 @dataclass
 class FlightControllerTelemetry:
     local_position: Any | None = None
+    attitude: Any | None = None
     ekf_flags: int | None = None
     status_text: str = ""
+    status_severity: int | None = None
+    status_last_update_s: float = 0.0
     active_source_set: int | None = None
     flight_mode: str = "UNKNOWN"
+    armed: bool = False
+    last_heartbeat_s: float = 0.0
+    gps_fix_type: int | None = None
+    gps_satellites: int | None = None
     rangefinder_distance_m: float | None = None
     rangefinder_sensor_id: int | None = None
     rangefinder_last_update_s: float = 0.0
@@ -71,8 +78,13 @@ class FlightControllerTelemetry:
 BRIDGE_STATE_PARAM = "SCR_USER1"
 BRIDGE_SOURCE_SET_PARAM = "SCR_USER2"
 BRIDGE_STATE_JETSON_BOOT = 10
+BRIDGE_STATE_SENSOR_CHECK_PASSED = 12
 BRIDGE_STATE_SLAM_STARTED = 40
 BRIDGE_STATE_SOURCE_SET_ACTIVE = 50
+BRIDGE_STATE_POSHOLD_READY = 54
+BRIDGE_STATE_CALIBRATION_ACTIVE = 70
+BRIDGE_STATE_CALIBRATION_COMPLETE_RTL = 71
+BRIDGE_STATE_SLAM_FLIGHT_ACTIVE = 72
 BRIDGE_STATE_SOURCE_SWITCH_FAILED = 82
 BRIDGE_STATE_SOURCE_SWITCH_NO_ACK = 83
 
@@ -165,18 +177,30 @@ def send_play_tune(master, tune: str, fallback_text: str) -> None:
 
 def send_startup_beeps(master) -> None:
     if hasattr(master.mav, "play_tune_send"):
-        send_play_tune(master, "MFT200L8AAA", "SLAM bridge boot: beep beep beep")
+        send_play_tune(master, "MFT200L8AAA", "SLAM bridge initiated")
         return
     for idx in range(3):
-        send_statustext(master, f"\aSLAM boot beep {idx + 1}/3", severity=mavutil.mavlink.MAV_SEVERITY_NOTICE)
+        send_statustext(master, f"\aSLAM initiated beep {idx + 1}/3", severity=mavutil.mavlink.MAV_SEVERITY_NOTICE)
+
+
+def send_sensor_check_beep(master) -> None:
+    send_play_tune(master, "MFT240L8A", "Sensor quick check passed")
 
 
 def send_ready_beeps(master) -> None:
-    if hasattr(master.mav, "play_tune_send"):
-        send_play_tune(master, "MFT200L16CDEF", "SLAM ready: four rising beeps")
-        return
-    for idx, note in enumerate(("C", "D", "E", "F"), start=1):
-        send_statustext(master, f"\aSLAM ready beep {idx}/4 {note}", severity=mavutil.mavlink.MAV_SEVERITY_NOTICE)
+    send_play_tune(master, "MFT200L16CDEF", "SLAM ready for PosHold")
+
+
+def send_calibration_active_beeps(master) -> None:
+    send_play_tune(master, "MFT180L16GABG", "SLAM calibration active")
+
+
+def send_calibration_complete_beeps(master) -> None:
+    send_play_tune(master, "MFT160L4CDEF", "Calibration complete, switching to RTL")
+
+
+def send_slam_flight_ping(master) -> None:
+    send_play_tune(master, "MFT240L8A", "SLAM flight active")
 
 
 def send_distance_sensor(master, distance_m: float, sensor_id: int, max_distance_m: float = 40.0) -> None:
@@ -436,6 +460,8 @@ def apply_fc_setup(master, config: FlightControllerSetupConfig) -> FlightControl
 
 def configure_telemetry_streams(master) -> None:
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED, 4.0)
+    request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 4.0)
+    request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT, 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_EKF_STATUS_REPORT, 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_STATUSTEXT, 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_NAMED_VALUE_FLOAT, 1.0)
@@ -453,6 +479,11 @@ def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None
         msg_type = msg.get_type()
         if msg_type == "LOCAL_POSITION_NED":
             state.local_position = msg
+        elif msg_type == "ATTITUDE":
+            state.attitude = msg
+        elif msg_type == "GPS_RAW_INT":
+            state.gps_fix_type = int(getattr(msg, "fix_type", 0))
+            state.gps_satellites = int(getattr(msg, "satellites_visible", 0))
         elif msg_type == "EKF_STATUS_REPORT":
             state.ekf_flags = int(getattr(msg, "flags", 0))
         elif msg_type == "STATUSTEXT":
@@ -460,6 +491,8 @@ def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None
             if isinstance(text, bytes):
                 text = text.decode("utf-8", errors="ignore")
             state.status_text = str(text).strip()
+            state.status_severity = int(getattr(msg, "severity", mavutil.mavlink.MAV_SEVERITY_INFO))
+            state.status_last_update_s = time.time()
         elif msg_type == "PARAM_VALUE":
             param_id = _normalize_param_id(getattr(msg, "param_id", ""))
             if param_id == "SCR_USER2":
@@ -472,6 +505,10 @@ def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None
                 state.active_source_set = int(round(float(getattr(msg, "value", 0.0))))
         elif msg_type == "HEARTBEAT":
             state.flight_mode = vehicle_mode_name(master, msg)
+            state.armed = bool(
+                int(getattr(msg, "base_mode", 0)) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+            )
+            state.last_heartbeat_s = time.time()
         elif msg_type == "DISTANCE_SENSOR":
             current_distance_cm = int(getattr(msg, "current_distance", 0))
             if current_distance_cm > 0:
@@ -513,3 +550,52 @@ def rangefinder_height_valid(
     if age_s > max(max_age_s, 0.05):
         return False
     return min_distance_m <= state.rangefinder_distance_m <= max_distance_m
+
+
+def gps_reference_valid(
+    state: FlightControllerTelemetry,
+    min_fix_type: int = 3,
+    min_satellites: int = 8,
+) -> bool:
+    if state.gps_fix_type is None or state.gps_satellites is None:
+        return False
+    return state.gps_fix_type >= min_fix_type and state.gps_satellites >= min_satellites
+
+
+def recent_status_blocks_slam(
+    state: FlightControllerTelemetry,
+    max_age_s: float = 8.0,
+) -> bool:
+    if not state.status_text or state.status_last_update_s <= 0.0:
+        return False
+    if time.time() - state.status_last_update_s > max(max_age_s, 0.1):
+        return False
+    text = state.status_text.lower()
+    block_tokens = (
+        "failsafe",
+        "prearm",
+        "arm:",
+        "arming",
+        "ekf",
+        "gps glitch",
+        "not ready",
+        "lane switch",
+        "vibration",
+    )
+    return any(token in text for token in block_tokens)
+
+
+def set_vehicle_mode(master, mode_name: str, timeout_s: float = 8.0) -> bool | None:
+    try:
+        master.set_mode(mode_name.upper())
+    except Exception:
+        return None
+
+    deadline = time.time() + max(timeout_s, 0.0)
+    while time.time() <= deadline:
+        msg = recv_match_safe(master, type="HEARTBEAT", blocking=True, timeout=0.5)
+        if msg is None:
+            continue
+        if vehicle_mode_name(master, msg) == mode_name.upper():
+            return True
+    return None

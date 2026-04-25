@@ -53,9 +53,63 @@ Why:
 Current FC-side bridge rule:
 
 - SLAM only becomes active in `POSHOLD`
+- calibration runs only in `BRAKE`
 - outside `POSHOLD`, the bridge releases SLAM and returns to the idle source set
-- the ready chime only means "GPS-less POSHOLD is actually ready"
+- the ready chime only means "SLAM PosHold is actually ready"
 - when enabled, Cube rangefinder height is used as the outgoing SLAM height reference
+- the bridge will not declare `POSHOLD` ready until a saved calibration profile exists and the current pose stream is healthy
+
+## Bridge events and tones
+
+The bridge now announces its important states directly over MAVLink `STATUSTEXT` and `PLAY_TUNE`. The bundled Lua relay mirrors the same state codes on the FC side.
+
+- `Jetson SLAM bridge initiated`
+  Trigger: 60 seconds after MAVLink is detected.
+  Tone: 3 short beeps.
+- `Sensor quick check passed`
+  Trigger: IMU, VIO pose, and rangefinder data are present and plausible enough to move toward readiness.
+  Tone: 1 short beep.
+- `SLAM ready for PosHold`
+  Trigger: calibration profile exists, current pose stream is healthy, rangefinder is valid, and no recent FC warning is blocking SLAM.
+  Tone: rising musical beep.
+- `SLAM calibration active`
+  Trigger: vehicle enters `BRAKE` and the calibration preconditions are satisfied.
+  Tone: rising-low musical pattern.
+- `Calibration complete, switching to RTL`
+  Trigger: `BRAKE` calibration finishes and the saved profile passes stability checks.
+  Tone: rising musical long beeps.
+- `SLAM flight active`
+  Trigger: vehicle is armed, in `POSHOLD`, using the SLAM source set, and the live pose stream remains healthy.
+  Tone: 1 small beep every 6 seconds.
+  GCS text: `SLAM flight active` every 10 seconds.
+
+## Calibration flow
+
+The current calibration mode is `BRAKE`.
+
+Why `BRAKE`:
+
+- it is not one of the banned modes
+- it lets the FC hold position with GPS while the Jetson measures its own pose bias against the FC reference
+- it is a much safer calibration reference than trying to calibrate while SLAM is already controlling `POSHOLD`
+
+What gets calibrated:
+
+- yaw offset between Jetson pose and FC attitude reference
+- XY origin offset between the Jetson pose frame and the FC local-position frame
+- rangefinder-backed height sanity as part of the plausibility checks
+
+Where the profile is stored:
+
+- `runtime/slam_calibration.json`
+
+What happens in flight:
+
+- switch the vehicle to `BRAKE`
+- Jetson waits for healthy GPS, FC local position, FC attitude, rangefinder, and a stable VIO pose
+- once the vehicle is settled, Jetson captures a stationary calibration window
+- if the sample is stable enough, Jetson saves the calibration profile
+- Jetson announces completion and commands `RTL`
 
 ## What this repo does today
 
@@ -78,7 +132,7 @@ Current FC-side bridge rule:
 - `scripts/run_local_vio.py`
   Runs the current VIO backend locally on Jetson, logs it, and optionally shows a preview without opening the FC or GCS links.
 - `scripts/run_slam_odometry_bridge.py`
-  Sends `ODOMETRY` to the Cube from a pose source, with optional external-IMU orientation binding, config loading, and reconnect behavior for service use.
+  Sends `ODOMETRY` to the Cube from a pose source, with optional external-IMU orientation binding, calibration-profile application, config loading, GCS announcements, and reconnect behavior for service use.
 - `scripts/configure_fc_for_slam.py`
   Applies the FC-side ExternalNav parameters used by the SLAM bridge and preserves the existing GPS and optical-flow setup by writing into EKF source set 3.
 - `scripts/jt26_to_mavlink.py`
@@ -106,7 +160,7 @@ Current FC-side bridge rule:
 - `config/default.yaml`
   Starter config for the odometry bridge.
 - `config/autostart.yaml`
-  Flight config for the systemd SLAM bridge service. It runs `vio`, but only starts acting on the FC once `POSHOLD` is selected and the bridge is actually ready.
+  Flight config for the systemd SLAM bridge service. It runs `vio`, calibrates in `BRAKE`, and only starts acting on the FC once `POSHOLD` is selected and the bridge is actually ready.
 
 ## Quick start
 
@@ -189,6 +243,8 @@ This keeps:
 - source set 2 for the current optical-flow / GPS-input path
 - source set 3 for SLAM ExternalNav
 
+Before using `POSHOLD` with SLAM for the first time, do one calibration flight in `BRAKE` so `runtime/slam_calibration.json` exists.
+
 Then run the demo `ODOMETRY` bridge:
 
 ```bash
@@ -225,6 +281,7 @@ python3 /home/atas/vscode/intellisense_slam/scripts/run_slam_odometry_bridge.py 
 Notes:
 - This `vio` provider is an experimental, in-repo visual odometry starter. It is useful for bench testing and iterative improvement but is not yet a full VIO/SLAM system.
 - For flight-grade SLAM you should replace this with a robust VIO (ORB-SLAM3, VINS-MONO, or similar) or add IMU-visual fusion and careful timestamps.
+- The bridge intentionally refuses to mark `POSHOLD` as ready until calibration has been completed and the current pose stream still passes the live plausibility checks.
 
 Bench test helper:
 

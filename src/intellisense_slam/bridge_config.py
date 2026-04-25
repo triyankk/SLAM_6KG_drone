@@ -72,6 +72,22 @@ class LidarSteeringConfig:
 
 
 @dataclass
+class CalibrationConfig:
+    enabled: bool = True
+    mode: str = "BRAKE"
+    duration_s: float = 12.0
+    min_samples: int = 80
+    min_gps_fix_type: int = 3
+    min_gps_satellites: int = 8
+    max_horizontal_speed_m_s: float = 0.35
+    max_roll_deg: float = 7.0
+    max_pitch_deg: float = 7.0
+    min_pose_quality: int = 55
+    profile_path: str = "runtime/slam_calibration.json"
+    auto_rtl_after_complete: bool = True
+
+
+@dataclass
 class SlamBridgeConfig:
     ports: list[str] = field(default_factory=_default_ports)
     baud: int = 115200
@@ -94,6 +110,7 @@ class SlamBridgeConfig:
     qgc: QgcBridgeConfig = field(default_factory=QgcBridgeConfig)
     gps_input: GpsInputConfig = field(default_factory=GpsInputConfig)
     lidar_steering: LidarSteeringConfig = field(default_factory=LidarSteeringConfig)
+    calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any], base_dir: Path | None = None) -> "SlamBridgeConfig":
@@ -122,6 +139,12 @@ class SlamBridgeConfig:
         lidar_steering_data = data.get("lidar_steering", {}) or {}
         if not isinstance(lidar_steering_data, dict):
             raise ValueError("config 'lidar_steering' must be a mapping")
+        calibration_data = data.get("calibration", {}) or {}
+        if not isinstance(calibration_data, dict):
+            raise ValueError("config 'calibration' must be a mapping")
+        profile_path = str(calibration_data.get("profile_path", "runtime/slam_calibration.json") or "")
+        if profile_path and not Path(profile_path).is_absolute():
+            profile_path = str((base_dir / profile_path).resolve())
         return cls(
             ports=[str(port) for port in ports],
             baud=int(data.get("baud", 115200)),
@@ -220,6 +243,24 @@ class SlamBridgeConfig:
                     str(mode).upper()
                     for mode in lidar_steering_data.get("allowed_modes", ["GUIDED"])
                 ],
+            ),
+            calibration=CalibrationConfig(
+                enabled=_as_bool(calibration_data.get("enabled", True)),
+                mode=str(calibration_data.get("mode", "BRAKE")).upper(),
+                duration_s=float(calibration_data.get("duration_s", 12.0)),
+                min_samples=int(calibration_data.get("min_samples", 80)),
+                min_gps_fix_type=int(calibration_data.get("min_gps_fix_type", 3)),
+                min_gps_satellites=int(calibration_data.get("min_gps_satellites", 8)),
+                max_horizontal_speed_m_s=float(
+                    calibration_data.get("max_horizontal_speed_m_s", 0.35)
+                ),
+                max_roll_deg=float(calibration_data.get("max_roll_deg", 7.0)),
+                max_pitch_deg=float(calibration_data.get("max_pitch_deg", 7.0)),
+                min_pose_quality=int(calibration_data.get("min_pose_quality", 55)),
+                profile_path=profile_path,
+                auto_rtl_after_complete=_as_bool(
+                    calibration_data.get("auto_rtl_after_complete", True)
+                ),
             ),
         )
 
