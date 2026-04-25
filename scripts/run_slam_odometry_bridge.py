@@ -575,11 +575,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         send_gcs_event(connection.master, "bridge linked; waiting for SLAM odometry readiness")
         configure_telemetry_streams(connection.master)
         fc_state = FlightControllerTelemetry(active_source_set=request_active_source_set(connection.master))
-        calibration_profile = (
-            load_calibration_profile(config.calibration.profile_path)
-            if config.calibration.profile_path
-            else CalibrationProfile()
-        )
+        calibration_profile = CalibrationProfile()
         calibration_accumulator = CalibrationAccumulator(
             mode_name=config.calibration.mode,
             duration_s=config.calibration.duration_s,
@@ -604,6 +600,10 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         calibration_complete_this_mode = False
         calibration_last_block_reason = ""
         calibration_last_block_s = 0.0
+        calibration_brake_mode_entered = False
+        calibration_brake_mode_announced = False
+        calibration_armed_check_announced = False
+        last_calibration_active_announcement_s = 0.0
         latest_imu_sample = None
         last_mode = fc_state.flight_mode
         source_started_published = False
@@ -769,13 +769,19 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                     if fc_state.flight_mode == config.calibration.mode and config.calibration.enabled:
                         send_gcs_event(
                             connection.master,
-                            f"{config.calibration.mode} selected; waiting for calibration preconditions",
+                            "Brake mode: calibration initiated",
                         )
                         calibration_complete_this_mode = False
+                        calibration_brake_mode_entered = True
+                        calibration_brake_mode_announced = False
+                        calibration_armed_check_announced = False
+                        last_calibration_active_announcement_s = 0.0
                     else:
+                        calibration_brake_mode_entered = False
                         calibration_accumulator.reset()
                         calibration_active_announced = False
                         calibration_last_block_reason = ""
+                        calibration_armed_check_announced = False
                     if fc_state.flight_mode == "POSHOLD":
                         send_gcs_event(connection.master, "POSHOLD selected; waiting for SLAM readiness")
                     last_mode = fc_state.flight_mode
@@ -787,16 +793,22 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                 ):
                     calibration_reason = calibration_block_reason(raw_pose, fc_state, config)
                     if calibration_reason is None:
+                        # Preconditions satisfied; ready to collect calibration samples
                         if not calibration_accumulator.active():
                             calibration_accumulator.start()
                         if not calibration_active_announced:
                             send_calibration_active_beeps(connection.master)
                             send_gcs_event(
                                 connection.master,
-                                f"{config.calibration.mode} calibration active",
+                                "Calibration active",
                             )
                             publish_bridge_state(connection.master, BRIDGE_STATE_CALIBRATION_ACTIVE, 0)
                             calibration_active_announced = True
+                            last_calibration_active_announcement_s = now_s
+                        # Periodic announcement every 10 seconds to show calibration progress
+                        if now_s - last_calibration_active_announcement_s >= 10.0:
+                            send_gcs_event(connection.master, "Calibration active")
+                            last_calibration_active_announcement_s = now_s
                         calibration_accumulator.collect(
                             reference_x_m=float(getattr(fc_state.local_position, "x", 0.0)),
                             reference_y_m=float(getattr(fc_state.local_position, "y", 0.0)),
@@ -814,7 +826,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                                 send_calibration_complete_beeps(connection.master)
                                 send_gcs_event(
                                     connection.master,
-                                    "Calibration complete, switching to RTL",
+                                    "Calibration completed for SLAM PosHold, initiating RTL",
                                 )
                                 publish_bridge_state(
                                     connection.master,
@@ -836,26 +848,40 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                             else:
                                 send_gcs_event(
                                     connection.master,
-                                    "Calibration sample was noisy; holding BRAKE and retrying",
+                                    "Calibration failed: not finished - pose data too noisy, holding BRAKE and retrying",
                                     severity=4,
                                 )
                                 calibration_accumulator.start()
                                 calibration_active_announced = False
                     else:
+                        # Calibration preconditions not met
                         if calibration_accumulator.active():
                             calibration_accumulator.reset()
                             calibration_active_announced = False
-                        if (
-                            calibration_reason != calibration_last_block_reason
-                            or now_s - calibration_last_block_s >= 5.0
-                        ):
-                            send_gcs_event(
-                                connection.master,
-                                f"{config.calibration.mode} calibration waiting: {calibration_reason}",
-                                severity=4,
-                            )
-                            calibration_last_block_reason = calibration_reason
-                            calibration_last_block_s = now_s
+                        # Special handling for unarmed vehicle
+                        if not fc_state.armed:
+                            if not calibration_armed_check_announced:
+                                send_gcs_event(
+                                    connection.master,
+                                    "Calibration waiting: drone must be armed",
+                                    severity=4,
+                                )
+                                calibration_armed_check_announced = True
+                                calibration_last_block_reason = ""
+                                calibration_last_block_s = now_s
+                        else:
+                            calibration_armed_check_announced = False
+                            if (
+                                calibration_reason != calibration_last_block_reason
+                                or now_s - calibration_last_block_s >= 5.0
+                            ):
+                                send_gcs_event(
+                                    connection.master,
+                                    f"Calibration failed: not finished - {calibration_reason}",
+                                    severity=4,
+                                )
+                                calibration_last_block_reason = calibration_reason
+                                calibration_last_block_s = now_s
 
                 should_switch = (
                     config.fc_setup.enabled

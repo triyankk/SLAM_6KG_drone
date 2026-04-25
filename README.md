@@ -18,10 +18,12 @@ Repository layout (important files)
 - `scripts/run_local_vio.py` — run the local VIO runner (no FC/GCS output)
 - `scripts/run_slam_odometry_bridge.py` — bridge: send `ODOMETRY` to Cube
 - `scripts/configure_fc_for_slam.py` — apply FC ExternalNav params (writes into EKF source set 3)
+- `scripts/stationary_slam_calibrate.py` — ground-based stationary calibration
 - `scripts/bench_vio.py` — bench capture of VIO+IMU to CSV
 - `install_slam_bridge_autostart.sh` — install systemd service for bridge
 - `ardupilot_lua/jetson_nogps_status.lua` — FC-side Lua relay for STATUSTEXT messages
 - `tools/` — diagnostic tools for IMU and JT16
+- `CALIBRATION_GUIDE.md` — detailed explanation of how calibration works
 
 Quick start — full command walkthrough
 
@@ -71,6 +73,49 @@ Stream ODOMETRY during bench (use with caution):
 python3 scripts/bench_vio.py --out /tmp/bench.csv --duration 30 --send --ports /dev/ttyACM1 /dev/ttyACM2
 ```
 
+5b) [Optional] Stationary SLAM calibration (while drone is on the ground)
+
+This step measures the alignment between SLAM/VIO and the flight controller without requiring flight or mode changes.
+
+**For a detailed explanation of what calibration does, see [CALIBRATION_GUIDE.md](CALIBRATION_GUIDE.md).**
+
+First, ensure the drone is connected to power and sitting still. Then run:
+```bash
+python3 scripts/stationary_slam_calibrate.py --duration 30
+```
+
+This script will:
+- Connect to the flight controller
+- Collect SLAM/VIO pose samples for 30 seconds
+- Measure the offset and noise compared to the FC reference position
+- Save calibration to `runtime/slam_calibration.json` if stable
+- Print a summary showing pass/fail and any noise levels
+
+Options:
+- `--duration N` — calibration duration in seconds (default: 30)
+- `--source vio` — use the in-repo VIO (default)
+- `--source hover` — use a stationary demo source instead
+- `--imu on` — enable external IMU binding (default: on)
+- `--output path/to/calibration.json` — save to a different path
+
+Output example:
+```
+PASS: Calibration data is stable and usable
+
+Calibration results:
+  Samples: 85
+  Yaw offset: +2.34 deg +/- 1.23 deg
+  X offset: -0.045 m +/- 0.089 m
+  Y offset: +0.012 m +/- 0.076 m
+  SLAM drift: 0.123 m
+  SLAM rate: 15.4 Hz
+  Rangefinder height: 1.42 m
+
+Calibration saved to: runtime/slam_calibration.json
+```
+
+The saved calibration is NOT automatically loaded by the SLAM bridge. To use it in the bridge, you would need to manually apply it or modify the bridge config to load it. This keeps calibration as a separate, optional step.
+
 6) Install autostart services (optional)
 ```bash
 sudo bash install_slam_bridge_autostart.sh
@@ -85,7 +130,7 @@ If you need to work locally with the camera, stop the service first:
 sudo systemctl stop intellisense_slam_bridge.service
 ```
 
-Bundled diagnostics
+7) Bundled diagnostics
 - IMU stream check:
 ```bash
 python3 tools/imu_stream_check.py
@@ -102,6 +147,7 @@ Notes and safety
 - The in-repo `vio` provider is experimental and intended for bench testing only.
 - Always validate the VIO output locally before enabling FC-facing ExternalNav.
 - Use persistent device paths (e.g. `/dev/serial/by-id/...`) or udev rules to avoid renumbering issues with USB devices.
+- Stationary calibration requires the drone to be powered on, seated still, connected to the Flight Controller, with GPS available or sufficient local position tracking.
 
 Support and next steps
 - Replace the experimental `vio` source with a production VIO/VINS/ORB-SLAM backend for flight-grade use.
@@ -110,9 +156,9 @@ Support and next steps
 License / Contributing
 - Fork and iterate; open a PR with improvements to the VIO backend or calibration tooling.
 
-- valid packet types observed: `0x50 0x51 0x52 0x53 0x54 0x56 0x59`
-- the IMU speaks a JY901-style binary packet stream, not plain text
-- the SLAM repo now carries the local CH341 driver module in:
+Hardware notes
+
+IM10A IMU:
 
 ```bash
 /home/atas/vscode/intellisense_slam/hardware/imu_module/ch341_module/ch341.ko
