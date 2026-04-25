@@ -82,7 +82,7 @@ local function relay_state_change(state_code, source_set_id)
     end
 
     if state_code == STATE_SLAM_FLIGHT_ACTIVE then
-        send_notice("SLAM flight active")
+        send_notice("No-GPS SLAM flight active")
         return
     end
 

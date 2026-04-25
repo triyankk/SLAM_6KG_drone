@@ -200,7 +200,7 @@ def send_calibration_complete_beeps(master) -> None:
 
 
 def send_slam_flight_ping(master) -> None:
-    send_play_tune(master, "MFT240L8A", "SLAM flight active")
+    send_play_tune(master, "MFT240L8A", "No-GPS SLAM flight active")
 
 
 def send_distance_sensor(master, distance_m: float, sensor_id: int, max_distance_m: float = 40.0) -> None:

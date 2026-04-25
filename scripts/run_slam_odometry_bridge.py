@@ -935,7 +935,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                         send_slam_flight_ping(connection.master)
                         last_slam_flight_beep_s = now_s
                     if now_s - last_slam_flight_message_s >= 10.0:
-                        send_gcs_event(connection.master, "SLAM flight active")
+                        send_gcs_event(connection.master, "No-GPS SLAM flight active")
                         last_slam_flight_message_s = now_s
                 slam_flight_active_last = slam_flight_active_now
 
