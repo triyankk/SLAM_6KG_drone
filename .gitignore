@@ -1,0 +1,71 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging/build
+dist/
+build/
+*.egg-info/
+pip-wheel-metadata/
+wheels/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.cache/
+.tox/
+.nox/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs
+logs/
+*.log
+captures/
+
+# Local environment files
+.env
+.env.*
+
+# Editor/IDE
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor swap/temp files
+*~
+*.swp
+*.swo
+
+# Compiled extensions
+*.so
+
+# Databases / runtime artifacts
+*.sqlite3
+*.db
+
+# Generated calibration/runtime outputs (optional - remove if you want these tracked)
+calibration_run.csv
+camera_to_imu_extrinsics.json
+
+# Jetson / device artifacts (do NOT commit /dev nodes)
+/dev/
+
+# Misc
+coverage.xml
+report.xml
+

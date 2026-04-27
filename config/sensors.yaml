@@ -1,0 +1,26 @@
+lidar:
+  model: JT16_MINI
+  lidar_ip: "192.168.1.201"
+  jetson_ip: "192.168.1.100"
+  udp_port: 2368
+  lidar_port: "auto"
+  lidar_baud: 3000000
+  max_detection_range_m: 7.0
+  danger_distance_m: 2.0
+  warning_distance_m: 3.0
+  stale_timeout_sec: 0.5
+  min_points_per_zone: 3
+  min_valid_distance_m: 0.15
+
+avoidance:
+  enable_avoidance_motion: false
+  dry_run: true
+  tick_rate_hz: 10
+  pulse_duration_ms: 100
+  cooldown_ms: 100
+  max_pitch_cmd: 0.12
+  max_roll_cmd: 0.12
+  max_velocity_cmd_mps: 0.4
+  require_vio_health: true
+  require_ekf_health: true
+  allowed_modes: ["GUIDED", "LOITER", "POSHOLD"]

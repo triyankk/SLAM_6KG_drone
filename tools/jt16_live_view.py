@@ -23,10 +23,11 @@ from jt16_serial_probe import (
 )
 
 
-# The JT16 manual says the channel layout is unit-specific and ideally comes from
-# the angle-correction file. For a quick live viewer we use an evenly spaced
-# approximation across the published 0-40 degree vertical field of view.
-APPROX_VERTICAL_ANGLES_DEG = np.linspace(0.0, 40.0, 16, dtype=np.float32)
+# JT16 Mini Vertical Angles: -15 to +15 degrees, 2 degree increments
+APPROX_VERTICAL_ANGLES_DEG = np.array([
+    -15.0, -13.0, -11.0, -9.0, -7.0, -5.0, -3.0, -1.0,
+    1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0
+], dtype=np.float32)
 
 
 @dataclass
