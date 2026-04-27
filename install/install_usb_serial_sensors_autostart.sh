@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Run:
-#   sudo bash /home/atas/vscode/intellisense_slam/hardware/install_usb_serial_sensors_autostart.sh
+#   sudo bash /home/atas/vscode/intellisense_slam/install/install_usb_serial_sensors_autostart.sh
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_TEMPLATE="${SCRIPT_DIR}/systemd/intellisense_usb_serial_sensors.service.template"
-UDEV_TEMPLATE="${SCRIPT_DIR}/udev/99-intellisense-usb-serial.rules"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+CONFIG_DIR="${SCRIPT_DIR}/hardware/configs"
+SERVICE_TEMPLATE="${CONFIG_DIR}/templates/intellisense_usb_serial_sensors.service.template"
+UDEV_TEMPLATE="${CONFIG_DIR}/99-intellisense-usb-serial.rules"
 SERVICE_NAME="intellisense_usb_serial_sensors.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 UDEV_PATH="/etc/udev/rules.d/99-intellisense-usb-serial.rules"
@@ -42,7 +43,7 @@ if [[ ! -f "${UDEV_TEMPLATE}" ]]; then
   exit 1
 fi
 
-chmod 0755 "${SCRIPT_DIR}/enable_usb_serial_sensors.sh"
+chmod 0755 "${SCRIPT_DIR}/install/enable_usb_serial_sensors.sh"
 
 sed -e "s|__WORKDIR__|${SCRIPT_DIR}|g" "${SERVICE_TEMPLATE}" > "${TMP_SERVICE}"
 install -m 0644 "${TMP_SERVICE}" "${SERVICE_PATH}"
@@ -57,15 +58,14 @@ if [[ "${ENABLE_NOW}" -eq 1 ]]; then
   systemctl enable "${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}"
   udevadm trigger --subsystem-match=tty >/dev/null 2>&1 || true
-  echo "Installed, enabled, and started ${SERVICE_NAME} from intellisense_slam/hardware."
+  echo "Installed, enabled, and started ${SERVICE_NAME}"
 else
   systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-  echo "Installed ${SERVICE_NAME} and udev rules from intellisense_slam/hardware, but left it disabled/stopped."
+  echo "Installed ${SERVICE_NAME} and udev rules, but left it disabled/stopped."
 fi
 
 echo "Stable serial symlinks:"
 echo "- JT16 lidar: /dev/jt16_usb"
 echo "- IM10A IMU: /dev/imu_usb"
 echo "Check service with: systemctl status ${SERVICE_NAME}"
-echo "Check nodes with: ls -l /dev/jt16_usb /dev/imu_usb /dev/ttyUSB*"

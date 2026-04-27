@@ -1,0 +1,18 @@
+[Unit]
+Description=Hesai JT16 Mini LiDAR Obstacle Avoidance Node
+After=network.target intellisense_usb_serial_sensors.service
+Wants=intellisense_usb_serial_sensors.service
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+SupplementaryGroups=dialout
+WorkingDirectory=__WORKDIR__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env python3 __WORKDIR__/scripts/avoidance/hesai_jt16_obstacle_node.py --config __WORKDIR__/config/sensors.yaml --mavport /dev/ttyACM1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Run:
-#   sudo bash /home/atas/vscode/intellisense_slam/hardware/enable_usb_serial_sensors.sh
+#   sudo bash /home/atas/vscode/intellisense_slam/install/enable_usb_serial_sensors.sh
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JT16_KO="${SCRIPT_DIR}/pl2303_module/pl2303.ko"
-IMU_KO="${SCRIPT_DIR}/imu_module/ch341_module/ch341.ko"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+DRIVER_DIR="${SCRIPT_DIR}/hardware/drivers"
+JT16_KO="${DRIVER_DIR}/pl2303_module/pl2303.ko"
+IMU_KO="${DRIVER_DIR}/imu_module/ch341_module/ch341.ko"
 JT16_SYMLINK="/dev/jt16_usb"
 IMU_SYMLINK="/dev/imu_usb"
 
@@ -42,9 +43,6 @@ load_custom_module() {
     if [[ -s /tmp/insmod.err ]]; then
       log "insmod stderr: $(sed -n '1,3p' /tmp/insmod.err)"
     fi
-    # If the module file already exists/registered, try to detect whether the
-    # module is now present in lsmod; if so, continue. Otherwise proceed
-    # without failing so the overall installer stays robust.
     if module_loaded "${name}"; then
       log "Module ${name} appears loaded after insmod attempt; continuing."
       rm -f /tmp/insmod.err || true
