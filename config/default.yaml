@@ -82,3 +82,22 @@ calibration:
   min_pose_quality: 55
   profile_path: runtime/slam_calibration.json
   auto_rtl_after_complete: true
+  fallback_mode: BRAKE
+  target_height_m: 5.0
+  target_height_tolerance_m: 0.35
+  ground_max_height_m: 0.7
+  height_stage_timeout_s: 120.0
+  axis_stage_duration_s: 8.0
+  axis_stage_timeout_s: 25.0
+  total_timeout_s: 240.0
+  max_stationary_drift_m: 0.35
+  max_stage_drift_m: 1.0
+  require_rc_link: true
+  movement_commands_enabled: false
+  movement_speed_m_s: 0.12
+  yaw_rate_deg_s: 6.0
+  dry_run: false
+  kill_switch_confirmed: false
+  min_battery_remaining_pct: 20
+  status_path: logs/slam_calibration_status.json
+  log_path: logs/slam_calibration.log

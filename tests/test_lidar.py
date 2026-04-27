@@ -1,6 +1,6 @@
 from collections import deque
 
-from intellisense_slam.lidar import LidarReader, LidarSnapshot, POINT_PACKET_LEN, extract_point_samples
+from slam_core.lidar import LidarReader, LidarSnapshot, POINT_PACKET_LEN, extract_point_samples
 
 
 def test_extract_point_samples_scales_distance_and_azimuth():

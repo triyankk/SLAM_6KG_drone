@@ -19,9 +19,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from intellisense_slam.vio_backend import VioPoseSource
-from intellisense_slam.external_imu import Im10aReader
-from intellisense_slam.mavlink_bridge import connect_to_cube
+from slam_core.vio_backend import VioPoseSource
+from slam_core.external_imu import Im10aReader
+from slam_core.mavlink_bridge import connect_to_cube
 
 
 def parse_args():
@@ -105,7 +105,7 @@ def main():
             writer.writerow(row)
             if connection is not None:
                 try:
-                    from intellisense_slam.mavlink_bridge import send_odometry
+                    from slam_core.mavlink_bridge import send_odometry
                     send_odometry(connection, pose)
                 except Exception:
                     pass

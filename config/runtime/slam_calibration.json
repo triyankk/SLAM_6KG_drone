@@ -1,0 +1,13 @@
+{
+  "calibration_mode": "STATIONARY",
+  "range_mean_m": 0.21,
+  "sample_count": 114,
+  "saved_at_epoch_s": 1777116899.0006046,
+  "valid": true,
+  "x_offset_m": -0.11264722194763432,
+  "x_std_m": 3.2084565062639925e-06,
+  "y_offset_m": -0.03016403356559565,
+  "y_std_m": 1.1982198605187016e-05,
+  "yaw_offset_deg": -128.10866006130624,
+  "yaw_std_deg": 0.006094499386845065
+}

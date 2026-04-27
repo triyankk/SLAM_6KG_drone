@@ -9,9 +9,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from intellisense_slam.bridge_config import SlamBridgeConfig, load_bridge_config
-from intellisense_slam.fc_config import apply_fc_setup, request_active_source_set
-from intellisense_slam.mavlink_bridge import connect_to_cube
+from slam_core.bridge_config import SlamBridgeConfig, load_bridge_config
+from slam_core.fc_config import apply_fc_setup, request_active_source_set
+from slam_core.mavlink_bridge import connect_to_cube
 
 
 def parse_args():

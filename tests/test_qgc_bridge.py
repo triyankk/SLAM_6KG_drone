@@ -1,4 +1,4 @@
-from intellisense_slam.fc_config import FlightControllerTelemetry, drain_fc_telemetry
+from slam_core.fc_config import FlightControllerTelemetry, drain_fc_telemetry
 
 
 class FakeMsg:

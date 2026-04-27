@@ -70,9 +70,18 @@ class FlightControllerTelemetry:
     last_heartbeat_s: float = 0.0
     gps_fix_type: int | None = None
     gps_satellites: int | None = None
+    rc_channel_count: int = 0
+    rc_rssi: int | None = None
+    rc_last_update_s: float = 0.0
+    rc_channels: dict[int, int] = field(default_factory=dict)
     rangefinder_distance_m: float | None = None
     rangefinder_sensor_id: int | None = None
     rangefinder_last_update_s: float = 0.0
+    landed_state: int | None = None
+    landed_state_last_update_s: float = 0.0
+    battery_remaining_pct: int | None = None
+    battery_voltage_v: float | None = None
+    battery_last_update_s: float = 0.0
 
 
 BRIDGE_STATE_PARAM = "SCR_USER1"
@@ -143,10 +152,25 @@ def request_message_interval(master, message_id: int, frequency_hz: float) -> No
 
 
 def send_statustext(master, text: str, severity=mavutil.mavlink.MAV_SEVERITY_INFO) -> None:
-    master.mav.statustext_send(
-        severity,
-        text[:50].encode("utf-8", errors="ignore"),
-    )
+    encoded_text = text.encode("utf-8", errors="ignore")
+    if len(encoded_text) <= 50:
+        master.mav.statustext_send(severity, encoded_text)
+        return
+
+    # This pymavlink build exposes the MAVLink1-sized STATUSTEXT API, so split
+    # long operator messages instead of silently dropping the useful tail.
+    words = text.split()
+    chunk = ""
+    for word in words:
+        candidate = word if not chunk else f"{chunk} {word}"
+        if len(candidate.encode("utf-8", errors="ignore")) <= 50:
+            chunk = candidate
+            continue
+        if chunk:
+            master.mav.statustext_send(severity, chunk.encode("utf-8", errors="ignore"))
+        chunk = word[:50]
+    if chunk:
+        master.mav.statustext_send(severity, chunk.encode("utf-8", errors="ignore"))
 
 
 def send_gcs_event(master, text: str, severity=mavutil.mavlink.MAV_SEVERITY_INFO) -> None:
@@ -201,6 +225,14 @@ def send_calibration_complete_beeps(master) -> None:
 
 def send_slam_flight_ping(master) -> None:
     send_play_tune(master, "MFT240L8A", "SLAM flight active")
+
+
+def send_ground_calibration_warning_beeps(master) -> None:
+    send_play_tune(master, "MFT220L16AAA", "Armed in Brake mode calibration warning")
+
+
+def send_calibration_failed_beeps(master) -> None:
+    send_play_tune(master, "MFT160L8CBA", "SLAM calibration failed")
 
 
 def send_distance_sensor(master, distance_m: float, sensor_id: int, max_distance_m: float = 40.0) -> None:
@@ -302,6 +334,28 @@ def send_body_velocity_nudge(master, vx_m_s: float, vy_m_s: float) -> None:
         0.0,
         0.0,
         0.0,
+    )
+
+
+def send_body_yaw_rate_nudge(master, yaw_rate_deg_s: float) -> None:
+    yaw_rate_only_mask = 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 1024
+    master.mav.set_position_target_local_ned_send(
+        int(time.monotonic() * 1000) & 0xFFFFFFFF,
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_FRAME_BODY_NED,
+        yaw_rate_only_mask,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        math.radians(float(yaw_rate_deg_s)),
     )
 
 
@@ -466,6 +520,9 @@ def configure_telemetry_streams(master) -> None:
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_STATUSTEXT, 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_NAMED_VALUE_FLOAT, 1.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR, 8.0)
+    request_message_interval(master, getattr(mavutil.mavlink, "MAVLINK_MSG_ID_RC_CHANNELS", 65), 4.0)
+    request_message_interval(master, getattr(mavutil.mavlink, "MAVLINK_MSG_ID_EXTENDED_SYS_STATE", 245), 2.0)
+    request_message_interval(master, getattr(mavutil.mavlink, "MAVLINK_MSG_ID_BATTERY_STATUS", 147), 1.0)
 
 
 def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None) -> None:
@@ -509,12 +566,32 @@ def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None
                 int(getattr(msg, "base_mode", 0)) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
             )
             state.last_heartbeat_s = time.time()
+        elif msg_type == "RC_CHANNELS":
+            state.rc_channel_count = int(getattr(msg, "chancount", 0))
+            state.rc_rssi = int(getattr(msg, "rssi", 0))
+            state.rc_last_update_s = time.time()
+            state.rc_channels = {
+                channel: int(getattr(msg, f"chan{channel}_raw", 0))
+                for channel in range(1, min(state.rc_channel_count, 18) + 1)
+            }
         elif msg_type == "DISTANCE_SENSOR":
             current_distance_cm = int(getattr(msg, "current_distance", 0))
             if current_distance_cm > 0:
                 state.rangefinder_distance_m = current_distance_cm / 100.0
                 state.rangefinder_sensor_id = int(getattr(msg, "id", 0))
                 state.rangefinder_last_update_s = time.time()
+        elif msg_type == "EXTENDED_SYS_STATE":
+            state.landed_state = int(getattr(msg, "landed_state", 0))
+            state.landed_state_last_update_s = time.time()
+        elif msg_type == "BATTERY_STATUS":
+            remaining = int(getattr(msg, "battery_remaining", -1))
+            if remaining >= 0:
+                state.battery_remaining_pct = remaining
+            voltages = getattr(msg, "voltages", [])
+            valid_voltages = [int(value) for value in voltages if 0 < int(value) < 65535]
+            if valid_voltages:
+                state.battery_voltage_v = sum(valid_voltages) / 1000.0
+            state.battery_last_update_s = time.time()
 
 
 def request_active_source_set(master) -> int | None:
@@ -550,6 +627,26 @@ def rangefinder_height_valid(
     if age_s > max(max_age_s, 0.05):
         return False
     return min_distance_m <= state.rangefinder_distance_m <= max_distance_m
+
+
+def mavlink_heartbeat_valid(
+    state: FlightControllerTelemetry,
+    max_age_s: float = 2.5,
+) -> bool:
+    return state.last_heartbeat_s > 0.0 and (time.time() - state.last_heartbeat_s) <= max(max_age_s, 0.1)
+
+
+def rc_link_valid(
+    state: FlightControllerTelemetry,
+    max_age_s: float = 2.5,
+) -> bool:
+    if state.rc_last_update_s <= 0.0 or (time.time() - state.rc_last_update_s) > max(max_age_s, 0.1):
+        return False
+    if state.rc_channel_count <= 0:
+        return False
+    if state.rc_rssi is not None and state.rc_rssi == 0:
+        return False
+    return any(value > 0 for value in state.rc_channels.values())
 
 
 def gps_reference_valid(

@@ -1,6 +1,6 @@
 import time
-from intellisense_slam.external_imu import FRAME_LEN, SYNC, apply_imu_sample_to_pose, extract_frames, nonzero_ratio
-from intellisense_slam.types import ImuSample, PoseSample
+from slam_core.external_imu import FRAME_LEN, SYNC, apply_imu_sample_to_pose, extract_frames, nonzero_ratio
+from slam_core.types import ImuSample, PoseSample
 
 
 def make_frame(frame_type: int, payload_bytes: bytes) -> bytes:

@@ -201,6 +201,10 @@ class VioPoseSource:
     def close(self) -> None:
         self.pipeline.stop()
 
+    def reset_origin(self) -> None:
+        self.pose = np.eye(4, dtype=np.float64)
+        self.last_velocity = np.zeros(3, dtype=np.float64)
+
     def _flow_only_translation(
         self,
         flow_vectors: np.ndarray,

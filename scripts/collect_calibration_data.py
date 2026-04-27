@@ -22,8 +22,8 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from intellisense_slam.vio_backend import VioPoseSource
-from intellisense_slam.external_imu import Im10aReader
+from slam_core.vio_backend import VioPoseSource
+from slam_core.external_imu import Im10aReader
 
 
 def parse_args():

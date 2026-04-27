@@ -85,6 +85,25 @@ class CalibrationConfig:
     min_pose_quality: int = 55
     profile_path: str = "runtime/slam_calibration.json"
     auto_rtl_after_complete: bool = True
+    fallback_mode: str = "BRAKE"
+    target_height_m: float = 5.0
+    target_height_tolerance_m: float = 0.35
+    ground_max_height_m: float = 0.7
+    height_stage_timeout_s: float = 120.0
+    axis_stage_duration_s: float = 8.0
+    axis_stage_timeout_s: float = 25.0
+    total_timeout_s: float = 240.0
+    max_stationary_drift_m: float = 0.35
+    max_stage_drift_m: float = 1.0
+    require_rc_link: bool = True
+    movement_commands_enabled: bool = False
+    movement_speed_m_s: float = 0.12
+    yaw_rate_deg_s: float = 6.0
+    dry_run: bool = False
+    kill_switch_confirmed: bool = False
+    min_battery_remaining_pct: int = 20
+    status_path: str = "logs/slam_calibration_status.json"
+    log_path: str = "logs/slam_calibration.log"
 
 
 @dataclass
@@ -111,6 +130,9 @@ class SlamBridgeConfig:
     gps_input: GpsInputConfig = field(default_factory=GpsInputConfig)
     lidar_steering: LidarSteeringConfig = field(default_factory=LidarSteeringConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    # Robustness settings for announcing the SLAM stream
+    stream_stable_s: float = 2.0
+    stream_loss_hysteresis_s: float = 5.0
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any], base_dir: Path | None = None) -> "SlamBridgeConfig":
@@ -145,6 +167,12 @@ class SlamBridgeConfig:
         profile_path = str(calibration_data.get("profile_path", "runtime/slam_calibration.json") or "")
         if profile_path and not Path(profile_path).is_absolute():
             profile_path = str((base_dir / profile_path).resolve())
+        status_path = str(calibration_data.get("status_path", "logs/slam_calibration_status.json") or "")
+        if status_path and not Path(status_path).is_absolute():
+            status_path = str((base_dir / status_path).resolve())
+        log_path = str(calibration_data.get("log_path", "logs/slam_calibration.log") or "")
+        if log_path and not Path(log_path).is_absolute():
+            log_path = str((base_dir / log_path).resolve())
         return cls(
             ports=[str(port) for port in ports],
             baud=int(data.get("baud", 115200)),
@@ -261,7 +289,30 @@ class SlamBridgeConfig:
                 auto_rtl_after_complete=_as_bool(
                     calibration_data.get("auto_rtl_after_complete", True)
                 ),
+                fallback_mode=str(calibration_data.get("fallback_mode", "BRAKE")).upper(),
+                target_height_m=float(calibration_data.get("target_height_m", 5.0)),
+                target_height_tolerance_m=float(calibration_data.get("target_height_tolerance_m", 0.35)),
+                ground_max_height_m=float(calibration_data.get("ground_max_height_m", 0.7)),
+                height_stage_timeout_s=float(calibration_data.get("height_stage_timeout_s", 120.0)),
+                axis_stage_duration_s=float(calibration_data.get("axis_stage_duration_s", 8.0)),
+                axis_stage_timeout_s=float(calibration_data.get("axis_stage_timeout_s", 25.0)),
+                total_timeout_s=float(calibration_data.get("total_timeout_s", 240.0)),
+                max_stationary_drift_m=float(calibration_data.get("max_stationary_drift_m", 0.35)),
+                max_stage_drift_m=float(calibration_data.get("max_stage_drift_m", 1.0)),
+                require_rc_link=_as_bool(calibration_data.get("require_rc_link", True)),
+                movement_commands_enabled=_as_bool(
+                    calibration_data.get("movement_commands_enabled", False)
+                ),
+                movement_speed_m_s=float(calibration_data.get("movement_speed_m_s", 0.12)),
+                yaw_rate_deg_s=float(calibration_data.get("yaw_rate_deg_s", 6.0)),
+                dry_run=_as_bool(calibration_data.get("dry_run", False)),
+                kill_switch_confirmed=_as_bool(calibration_data.get("kill_switch_confirmed", False)),
+                min_battery_remaining_pct=int(calibration_data.get("min_battery_remaining_pct", 20)),
+                status_path=status_path,
+                log_path=log_path,
             ),
+            stream_stable_s=float(data.get("stream_stable_s", 2.0)),
+            stream_loss_hysteresis_s=float(data.get("stream_loss_hysteresis_s", 5.0)),
         )
 
 

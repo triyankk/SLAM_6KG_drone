@@ -3,6 +3,7 @@
 import argparse
 import csv
 import math
+import subprocess
 import sys
 import time
 from collections import deque
@@ -16,17 +17,17 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from intellisense_slam.external_imu import Im10aReader, apply_imu_sample_to_pose
-from intellisense_slam.fc_config import (
+from slam_core.external_imu import Im10aReader, apply_imu_sample_to_pose
+from slam_core.fc_config import (
     FlightControllerTelemetry,
     configure_telemetry_streams,
     drain_fc_telemetry,
     rangefinder_height_valid,
     request_active_source_set,
 )
-from intellisense_slam.mavlink_bridge import connect_to_cube
-from intellisense_slam.types import PoseSample
-from intellisense_slam.vio_backend import VioPoseSource
+from slam_core.mavlink_bridge import connect_to_cube
+from slam_core.types import PoseSample
+from slam_core.vio_backend import VioPoseSource
 
 
 def quaternion_to_yaw_deg(sample: PoseSample) -> float:
@@ -65,7 +66,42 @@ def parse_args():
     parser.add_argument("--history-points", type=int, default=1200)
     parser.add_argument("--status-seconds", type=float, default=1.0)
     parser.add_argument("--rate-hz", type=float, default=15.0)
+    parser.add_argument(
+        "--stationary-calibration",
+        choices=["on", "off"],
+        default="off",
+        help="Run the stationary SLAM calibration workflow instead of the preview loop.",
+    )
+    parser.add_argument("--calibration-config", default="config/autostart.yaml")
     return parser.parse_args()
+
+
+def run_stationary_calibration(args) -> int:
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "stationary_slam_calibrate.py"),
+        "--config",
+        args.calibration_config,
+        "--duration",
+        str(args.duration if args.duration > 0 else 25.0),
+        "--rate-hz",
+        str(args.rate_hz),
+        "--imu",
+        args.imu,
+        "--imu-port",
+        args.imu_port,
+        "--imu-baud",
+        args.imu_baud,
+        "--imu-scan-seconds",
+        str(args.imu_scan_seconds),
+        "--ports",
+        *args.ports,
+        "--baud",
+        str(args.baud),
+    ]
+    print("Launching stationary SLAM calibration through run_local_vio.py:")
+    print(" ".join(command))
+    return subprocess.call(command)
 
 
 def open_csv_writer(path_text: str):
@@ -235,6 +271,9 @@ def render_preview(
 
 def main():
     args = parse_args()
+    if args.stationary_calibration == "on":
+        sys.exit(run_stationary_calibration(args))
+
     vio = VioPoseSource()
     imu_reader = None
     cube_connection = None

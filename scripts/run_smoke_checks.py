@@ -5,7 +5,7 @@ Run lightweight static and import-time checks for the SLAM package.
 Checks performed:
 - compileall on the `src` tree to catch syntax errors
 - AST parse pass for each .py file
-- attempt to import each top-level module under `intellisense_slam`
+- attempt to import each top-level module under `slam_core`
 - run small unit tests present in `tests/` by importing them
 
 This avoids installing external linters and provides a reproducible smoke check.
@@ -21,7 +21,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
-PKG = "intellisense_slam"
+PKG = "slam_core"
 
 
 def ast_check(py_path: Path) -> bool:

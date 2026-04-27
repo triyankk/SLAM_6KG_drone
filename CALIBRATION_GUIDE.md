@@ -178,57 +178,57 @@ y_std_m = standard_deviation(all sampled y offsets)
 
 The `stationary_slam_calibrate.py` script:
 
-1. **Connect to Flight Controller**
-   - Establishes MAVLink link
-   - Reads FC telemetry (position, attitude, rangefinder, GPS)
-   - Does NOT arm or change flight modes
+1. **Stops conflicting services**
+   - Stops `intellisense_slam_bridge.service` if it is active
+   - This frees the RealSense/VIO pipeline for calibration
 
-2. **Collect SLAM Poses**
-   - Opens the VIO pose source (same backend as `run_local_vio.py`)
-   - Samples the pose at ~15 Hz for 30 seconds (default)
-   - Each sample represents one moment in time
+2. **Checks required sensors**
+   - MAVLink heartbeat and FC attitude telemetry
+   - RealSense/VIO frames and timestamps
+   - IMU stream and stability
+   - Rangefinder height and noise
 
-3. **Build Offset Measurements**
-   - For each SLAM pose, compare to FC's **current** reference
-   - Calculate yaw offset, X offset, Y offset
-   - Store all measurements in arrays
+3. **Resets local VIO origin**
+   - Uses the same VIO backend as `run_local_vio.py`
+   - Applies the available reset logic before measuring drift
 
-4. **Analyze Stability**
-   - Average all offset measurements → **mean offset** (final calibration value)
-   - Calculate standard deviation → **noise level** (confidence indicator)
-   - Measure peak-to-peak drift → **drift** (should be small while stationary)
+4. **Collects stationary samples**
+   - Samples VIO at ~15 Hz for 25 seconds by default
+   - Uses rangefinder height when available
+   - Measures stationary drift, pose noise, timestamp freshness, and height scale
 
-5. **Pass/Fail Check**
+5. **Builds offset measurements**
+   - For each stable SLAM pose, compare to FC yaw and local XY reference when available
+   - Calculate yaw offset, X offset, and Y offset
+
+6. **Pass/Fail Check**
    ```
    PASS if:
-     - yaw_std <= 15°
-     - x_std <= 1.0 m
-     - y_std <= 1.0 m
-     - pose_drift <= 0.5 m (stationary, so should be tiny)
-     - slam_rate >= 5 Hz (enough samples)
+     - MAVLink heartbeat is present
+     - IMU is stable
+     - rangefinder is valid and not noisy
+     - VIO timestamps are not frozen
+     - VIO quality is high enough
+     - stationary drift <= configured limit
+     - pose noise <= configured limit
    
    FAIL otherwise (reason reported)
    ```
 
-6. **Save Result**
+7. **Save and restart**
    - If PASS: write `runtime/slam_calibration.json`
    - Includes offsets, noise levels, sample count, timestamp
+   - Restarts the flight VIO service after calibration
 
 ### Example Output
 
 ```
-PASS: Calibration data is stable and usable
-
-Calibration results:
-  Samples: 87
-  Yaw offset: +1.23 deg +/- 0.89 deg      ← mean ± std
-  X offset: +0.047 m +/- 0.083 m
-  Y offset: -0.012 m +/- 0.076 m
-  SLAM drift: 0.089 m                     ← position change while stationary
-  SLAM rate: 14.5 Hz
-  Rangefinder height: 1.38 m
-
-Calibration saved to: runtime/slam_calibration.json
+2026-04-25 14:30:05 | stage=vio mode=BRAKE armed=no rangefinder=0.22m vio=ok+imu+rng/q78 imu=stable mavlink=ok
+  Stationary drift detected: 3.2 cm over 15.0 seconds
+2026-04-25 14:30:18 | stage=complete mode=BRAKE armed=no rangefinder=0.22m vio=ok+imu+rng/q81 imu=stable mavlink=ok
+  Calibration passed. Saved profile to runtime/slam_calibration.json.
+2026-04-25 14:30:19 | stage=complete mode=BRAKE armed=no rangefinder=0.22m vio=ok+imu+rng/q81 imu=stable mavlink=ok
+  System is flight ready.
 ```
 
 **Interpretation:**
@@ -246,9 +246,9 @@ Calibration saved to: runtime/slam_calibration.json
 - Minor vibration or wind
 
 **Stationary calibration is NOT robust to:**
-- GPS outage (if relying on GPS for FC reference)
 - Missing depth data (if VIO needs depth)
 - Severe motion blur (if drone moved during collection)
+- A rangefinder that is reporting false height while the drone is still
 
 ---
 
@@ -257,90 +257,106 @@ Calibration saved to: runtime/slam_calibration.json
 ### When to Use It
 
 **Best for:**
-- Pre-flight calibration while FC holds position with GPS
-- Calibrating with the drone **armed but stationary**
-- Using the Cube's **attitude and local position** as reference (very trustworthy)
-- Detecting if SLAM drifts once armed
+- Supervised GPS-denied calibration using Brake mode as the safety envelope
+- Confirming VIO, IMU, rangefinder, MAVLink, RC link, and FC health before PosHold
+- Using rangefinder height as the primary altitude reference during calibration
+- Running a gentle, bounded pitch/roll/yaw calibration sequence after pilot takeoff
 
 **Use case scenario:**
-1. Arm the drone in BRAKE mode (FC holds position)
-2. Wait for GPS lock and attitude to stabilize
-3. Trigger calibration → captures 12 seconds of stationary data
-4. If stable → saves calibration
-5. If not → announcements tell you what's wrong
+1. Switch to BRAKE mode
+2. If disarmed, the bridge announces that it is waiting for arm
+3. Arm in BRAKE while on the ground
+4. The bridge runs prechecks and warns that the calibration takeoff sequence is active
+5. Pilot manually takes off; the Jetson does **not** command takeoff
+6. At about 5m AGL by rangefinder, the bridge announces hold-for-calibration
+7. The bridge runs gentle pitch, roll, and yaw calibration stages
+8. If stable, it saves calibration and requests RTL
+9. If unsafe, it stops calibration and requests the configured fallback mode
 
 ### How It Works
 
 The SLAM bridge's built-in calibration (_not_ the stationary script):
 
 1. **Detect BRAKE Mode Entry**
-   - Announces: "Brake mode: calibration initiated"
+   - Announces: "Brake mode: SLAM calibration fused with Brake mode is active."
    - Resets calibration state
 
 2. **Check Preconditions**
    - Vehicle must be **armed**
-   - GPS must be healthy (fix type ≥3, ≥8 satellites)
-   - FC local position available
    - FC attitude available
    - Rangefinder healthy
-   - SLAM pose quality good (≥55/100)
+   - MAVLink heartbeat present
+   - RC link active
+   - EKF/FC status text not reporting blocking failures
+   - SLAM/VIO pose quality good (≥55/100 by default)
 
-3. **While Preconditions Met**
-   - Accumulate offset samples at each pose update
-   - Announces: "Calibration active" (once, then every 10 seconds)
-   - Collects for 12 seconds (configurable)
+3. **Ground armed in BRAKE**
+   - Announces: "Armed in Brake mode. SLAM calibration takeoff sequence active."
+   - Repeats a short warning beep while waiting on the ground
+   - Does not command takeoff
 
-4. **If Preconditions Not Met**
-   - Announces specific reason: "GPS reference not healthy", "vehicle not level", etc.
-   - Waits for conditions to improve
-   - Does NOT fail; keeps trying
+4. **Pilot takeoff and rangefinder target**
+   - Waits for the pilot to fly to the configured rangefinder height
+   - Default target is 5.0m AGL with 0.35m tolerance
+   - Announces: "Reached 5 meters by rangefinder. Holding altitude for SLAM calibration."
 
-5. **Build Profile**
-   - After 12 seconds, check noise/stability
+5. **Axis stages**
+   - Announces pitch, roll, and yaw stage start/complete
+   - Announces: "SLAM calibration active." every 10 seconds
+   - Monitors rangefinder, RC link, VIO tracking, MAVLink, mode, drift, and timeouts
+   - Optional tiny pitch/roll/yaw nudges exist but are disabled by default
+
+6. **Build Profile**
+   - After all stages, check noise/stability
    - If stable (yaw_std ≤ 10°, xy_std ≤ 0.75m):
      - Save `runtime/slam_calibration.json`
-     - Announce: "Calibration completed for SLAM PosHold, initiating RTL"
-     - Auto-switch to RTL
-   - If noisy:
-     - Announce: "Calibration sample was noisy; holding BRAKE and retrying"
-     - Restart collection
+     - Announce: "Calibration successful: SLAM PosHold calibration complete. Initiating RTL."
+     - Request RTL if RTL is available and final health checks pass
+   - If unsafe:
+     - Announce: "Calibration failed: not finished. Reason: <reason>"
+     - Stop calibration and request the configured fallback mode
 
 ### Key Differences from Stationary
 
 | Aspect | Stationary | BRAKE Mode |
 |---|---|---|
 | **Drone armed?** | No (ground bench) | Yes (armed in BRAKE) |
-| **GPS used?** | Optional; can ignore GPS | Required; uses GPS for positioning |
+| **GPS used?** | Not required for basic health checks | Not required by the calibration gate |
 | **Flight modes** | No mode changes required | Must be in BRAKE mode |
-| **Duration** | 30 seconds (configurable) | 12 seconds (configurable) |
-| **FC reference** | Local position + attitude | Local position + attitude (same) |
+| **Duration** | 25 seconds by default | Stage-based; timeout protected |
+| **FC reference** | Attitude, rangefinder, optional local position | Attitude, rangefinder, optional local position |
 | **Triggering** | Manual script run | Automatic on BRAKE mode entry |
-| **Failure handling** | Immediate FAIL report | Waits, announces preconditions |
+| **Failure handling** | Immediate FAIL report | Fail-closed with fallback mode |
 | **GCS feedback** | One-time pass/fail | Continuous status updates |
-| **Safety** | No arming/mode changes | Uses existing BRAKE hold |
+| **Safety** | No arming/mode changes | No auto-takeoff; stops on mode/RC/range/VIO faults |
 
 ### Example GCS Sequence
 
 ```
 [Pilot switches to BRAKE mode]
-FC: "Brake mode: calibration initiated"
+GCS: "Brake mode: SLAM calibration fused with Brake mode is active."
 
-[Vehicle armed and settling]
-FC: "Calibration waiting: drone must be armed"
+GCS: "Brake mode detected. Waiting for arm to start SLAM calibration."
 [Pilot arms]
 
-[GPS acquiring lock]
-FC: "Calibration waiting: GPS reference not healthy enough"
+GCS: "Armed in Brake mode. SLAM calibration takeoff sequence active."
+[Pilot manually takes off and climbs]
 
-[After ~10 seconds, GPS lock achieved]
-FC: "Calibration active"
+GCS: "Reached 5 meters by rangefinder. Holding altitude for SLAM calibration."
+GCS: "Pitch axis calibration started."
+GCS: "SLAM calibration active."
+GCS: "Pitch axis calibration complete."
+GCS: "Roll axis calibration started."
+GCS: "Roll axis calibration complete."
+GCS: "Yaw axis calibration started."
+GCS: "Yaw axis calibration complete."
+GCS: "Calibration successful: SLAM PosHold calibration complete. Initiating RTL."
+```
 
-[After another 10 seconds]
-FC: "Calibration active"
+Failure example:
 
-[After 12 total seconds of collection]
-FC: "Calibration completed for SLAM PosHold, initiating RTL"
-FC: "RTL command accepted after calibration"
+```
+GCS: "Calibration failed: not finished. Reason: SLAM/VIO lost tracking"
 ```
 
 ---
@@ -352,16 +368,15 @@ FC: "RTL command accepted after calibration"
 **Pros:**
 - No flight required
 - No arming required
-- Quick validation (30 seconds)
+- Quick validation (25 seconds by default)
 - Great for lab/bench testing
 - Full control over duration and parameters
 - Can retry easily
 
 **Cons:**
-- Requires some GPS or FC local position
 - Doesn't reflect armed/real-flight dynamics
 - Need to manually run the script
-- Results not automatically used
+- Requires RealSense, IMU, rangefinder, and MAVLink to be available at the same time
 
 **Best for:**
 - Validating SLAM health before first flight
@@ -374,16 +389,15 @@ FC: "RTL command accepted after calibration"
 
 **Pros:**
 - Happens during flight operations (when armed)
-- Uses real flight controller reference
+- Uses real flight controller attitude/rangefinder references
 - Automatic on mode entry
-- Can retry during same flight
+- Fail-closed if mode, RC, rangefinder, MAVLink, VIO, or drift becomes unsafe
 - Captures armed system behavior
 
 **Cons:**
-- Requires GPS lock first
 - Requires drone to be armed
-- Takes flight time to calibrate
-- Can fail if GPS is weak
+- Requires pilot takeoff to the configured rangefinder height
+- Takes flight time and clear airspace to calibrate
 - Results only saved if stable
 
 **Best for:**
@@ -522,10 +536,12 @@ GCS: "Calibration failed: not finished - SLAM pose is not stable enough yet"
 ```
 
 **Common reasons:**
-- Vehicle is swaying or hasn't settled (wind, soft landing)
-- Pilot is testing hover stability (need it perfectly level)
+- Rangefinder becomes invalid
+- RC link or MAVLink heartbeat drops
+- Pilot changes out of BRAKE mode
+- Vehicle drifts beyond the configured safe limit
 - SLAM quality is poor (features hard to track)
-- Rangefinder is malfunctioning
+- EKF rejects external navigation data
 
 ---
 
@@ -535,7 +551,7 @@ GCS: "Calibration failed: not finished - SLAM pose is not stable enough yet"
 
 1. **Run stationary calibration**
    ```bash
-   python3 scripts/stationary_slam_calibrate.py --duration 30
+   python3 scripts/stationary_slam_calibrate.py --config config/autostart.yaml
    ```
    - Check the output for pass/fail
    - If pass: note the offsets and noise levels
@@ -555,17 +571,18 @@ GCS: "Calibration failed: not finished - SLAM pose is not stable enough yet"
 ### Before Flight Tests (BRAKE Mode)
 
 1. **Arm in BRAKE mode**
-   - Ensure GPS lock first
-   - Vehicle should be level and stationary
+   - Enter Brake mode first
+   - The Jetson does not command takeoff
+   - Arm only after the ground setup is safe
 
-2. **Wait for calibration**
-   - Bridge will automatically attempt calibration
-   - GCS shows "Calibration active" repeatedly
-   - Wait 12+ seconds for completion
+2. **Take off manually**
+   - Wait for the ground armed warning
+   - Fly gently to the configured rangefinder height, 5m by default
+   - Hold Brake mode unless you need to abort
 
 3. **Check the announcement**
-   - If "Calibration completed" → ready for POSHOLD
-   - If "Calibration failed: ..." → fix the issue (wind, level, etc.) before switching to POSHOLD
+   - If "Calibration successful: SLAM PosHold calibration complete. Initiating RTL." appears, the bridge saved the profile and requested RTL
+   - If "Calibration failed: not finished. Reason: ..." appears, fix the named issue before switching to POSHOLD
 
 ### In Flight (POSHOLD with SLAM)
 

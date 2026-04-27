@@ -3,8 +3,8 @@ from pathlib import Path
 import yaml
 from pymavlink import mavutil
 
-from intellisense_slam.bridge_config import load_bridge_config
-from intellisense_slam.fc_config import (
+from slam_core.bridge_config import load_bridge_config
+from slam_core.fc_config import (
     BRIDGE_SOURCE_SET_PARAM,
     BRIDGE_STATE_JETSON_BOOT,
     BRIDGE_STATE_PARAM,
@@ -17,9 +17,9 @@ from intellisense_slam.fc_config import (
     send_body_velocity_nudge,
     send_companion_heartbeat,
 )
-from intellisense_slam.bridge_config import GpsInputConfig
-from intellisense_slam.mavlink_bridge import CubeConnection, send_odometry
-from intellisense_slam.types import PoseSample
+from slam_core.bridge_config import GpsInputConfig
+from slam_core.mavlink_bridge import CubeConnection, send_odometry
+from slam_core.types import PoseSample
 
 
 class FakeMav:

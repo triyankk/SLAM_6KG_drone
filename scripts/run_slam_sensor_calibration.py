@@ -12,9 +12,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from intellisense_slam.external_imu import Im10aReader
-from intellisense_slam.lidar import LidarReader
-from intellisense_slam.realsense_capture import open_depth_pipeline, wait_for_frame_bundle
+from slam_core.external_imu import Im10aReader
+from slam_core.lidar import LidarReader
+from slam_core.realsense_capture import open_depth_pipeline, wait_for_frame_bundle
 
 
 def parse_args():

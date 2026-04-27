@@ -1,6 +1,7 @@
 import math
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 os.environ.setdefault("MAVLINK20", "1")
@@ -15,6 +16,40 @@ class CubeConnection:
     master: object
     port: str
     baud: int
+
+
+def discover_cube_ports() -> list[str]:
+    candidates: list[str] = []
+    by_id_dir = Path("/dev/serial/by-id")
+    if by_id_dir.exists():
+        for path in sorted(by_id_dir.iterdir()):
+            name = path.name.lower()
+            if "cube" in name or "cubepilot" in name or "cubeorange" in name:
+                candidates.append(str(path))
+
+    candidates.extend(str(path) for path in sorted(Path("/dev").glob("ttyACM*")))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def expand_cube_ports(ports: Iterable[str]) -> list[str]:
+    configured = [str(port) for port in ports]
+    discovered = discover_cube_ports()
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for candidate in [*configured, *discovered]:
+        if not candidate or candidate.lower() == "auto" or candidate in seen:
+            continue
+        seen.add(candidate)
+        expanded.append(candidate)
+    return expanded
 
 
 def quaternion_to_euler(sample: PoseSample) -> tuple[float, float, float]:
@@ -38,7 +73,8 @@ def quaternion_to_euler(sample: PoseSample) -> tuple[float, float, float]:
 
 def connect_to_cube(ports: Iterable[str], baud: int, heartbeat_timeout_s: float = 8.0) -> CubeConnection:
     last_error = None
-    for port in ports:
+    candidate_ports = expand_cube_ports(ports)
+    for port in candidate_ports:
         master = None
         try:
             master = mavutil.mavlink_connection(port, baud=baud)
@@ -51,7 +87,7 @@ def connect_to_cube(ports: Iterable[str], baud: int, heartbeat_timeout_s: float 
                     master.close()
                 except Exception:  # noqa: BLE001
                     pass
-    raise RuntimeError(f"Failed to connect to Cube on ports {list(ports)}: {last_error}")
+    raise RuntimeError(f"Failed to connect to Cube on ports {candidate_ports}: {last_error}")
 
 
 def send_odometry(
