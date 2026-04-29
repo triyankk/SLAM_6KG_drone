@@ -1,221 +1,406 @@
-# Intellisense SLAM — Quick Reference
+# Intellisense SLAM Field Manual
 
-This repository contains helper scripts and a lightweight MAVLink bridge to provide ExternalNav (`ODOMETRY`) from a Jetson companion computer to a Cube flight controller for GPS-denied testing.
+This repo runs Jetson-side SLAM/VIO support for a Cube Orange+ GPS-denied drone.
 
-Purpose
-- Provide safe, testable paths to validate visual/IMU pose sources on the Jetson
-- Send ExternalNav `ODOMETRY` to the Cube only after explicit calibration and readiness checks
-- Offer bench tools for VIO capture, IMU validation, and JT16/JT26 lidar testing
-- **Obstacle Avoidance**: 360-degree LiDAR-based obstacle awareness and automatic resistance commands
+The current safe field process is:
+- keep only `intellisense_slam_bridge.service` running
+- do not run the passive MAVLink monitor during flight
+- do not let Mission Planner or another local process share the same Cube serial port
+- use Brake mode only as the SLAM calibration trigger
+- treat GPS-denied PosHold as not flight-ready until ExternalNav is accepted and calibration passes
 
-## LiDAR Obstacle Avoidance
+## Current Flight Status
 
-The system uses a Hesai JT16 Mini LiDAR to detect obstacles in 8 zones around the drone.
+As of the latest bench checks:
+- SLAM bridge service runs on boot.
+- Passive monitor is disabled and should stay disabled for field use.
+- VIO is alive when status shows `vio=ok`.
+- IMU is alive when status shows `imu=stable`.
+- RC is alive when status shows `rc_link=ok`.
+- Brake mode detection works.
+- Disarmed Brake mode should show `WAITING_FOR_ARM`, not `SLAM calibration active`.
+- GPS-denied PosHold is not ready until status shows ExternalNav accepted/ready.
 
-### How it works:
-1.  **Filtering**: Only points between 0.15m and 7.0m are considered.
-2.  **Zoning**: Points are divided into 8 sectors: Front, Front-Right, Right, Rear-Right, Rear, Rear-Left, Left, Front-Left.
-3.  **Danger (<2m)**: If an object enters the 2m danger zone, the system calculates an avoidance vector and sends a short velocity pulse in the opposite direction.
-4.  **Resistance**: If the pilot attempts to push the drone towards an obstacle inside the danger zone, the system resists that input.
-5.  **Safety**: Movement is disabled by default (`enable_avoidance_motion: false`). It only activates when armed and in a supported mode (GUIDED, LOITER, POSHOLD).
+Known current blocker:
+- If QGC shows `PreArm: GPS 1: Bad fix`, the Cube is still expecting GPS for that arming/navigation path.
+- Brake calibration needs a valid GPS/EKF reference because it compares SLAM/VIO against GPS/EKF local position.
+- If `ekf_external_nav=pending_or_rejected`, the Cube is not confirmed to be using SLAM as navigation.
 
-### Useful Avoidance Commands:
+## Active Service
 
-**1. Check LiDAR health:**
+The only field autostart service should be:
+
 ```bash
-python3 scripts/diagnostics/check_hesai_jt16.py
+intellisense_slam_bridge.service
 ```
 
-**2. Run visualization (Top-down view):**
-```bash
-python3 scripts/avoidance/visualize_lidar_avoidance.py
-```
-This shows the 8 zones, raw points, and the calculated avoidance vector (cyan arrow).
+Check it:
 
-**3. Run in Dry-Run mode (Safe):**
 ```bash
-python3 scripts/avoidance/hesai_jt16_obstacle_node.py --dry-run
-```
-Computes everything and sends GCS warnings, but sends NO movement commands.
-
-**4. Enable real movement (Dangerous - Use with caution):**
-```bash
-python3 scripts/avoidance/hesai_jt16_obstacle_node.py --enable-motion
+sudo systemctl status intellisense_slam_bridge.service
+journalctl -u intellisense_slam_bridge.service -f
 ```
 
-Requirements
-- Jetson (Ubuntu) with camera and USB serial devices attached
-- Python 3.10+ and the repo Python dependencies (see `pyproject.toml` or install via `pip` as needed)
-- Cube flight controller connected via USB to the Jetson
+Restart it:
 
-Repository layout (important folders)
-- `scripts/avoidance/` — LiDAR obstacle node and visualizer
-- `scripts/calibration/` — SLAM, VIO, and sensor calibration tools
-- `scripts/diagnostics/` — hardware health checks and MAVLink probes
-- `scripts/runners/` — main flight bridges and local VIO runners
-- `install/` — systemd and driver installation scripts
-- `config/` — sensor and autostart configuration files
-- `ardupilot_lua/` — safety and status scripts for the Cube
-
-Quick start — full command walkthrough
-
-1) Check hardware and dependencies
 ```bash
-python3 scripts/diagnostics/check_slam_readiness.py
+sudo systemctl restart intellisense_slam_bridge.service
 ```
 
-2) Verify Hesai JT16 Mini LiDAR
+Install or refresh autostart:
+
 ```bash
-python3 scripts/diagnostics/check_hesai_jt16.py
-```
-If using Ethernet LiDAR, provide the IP:
-```bash
-python3 scripts/diagnostics/check_hesai_jt16.py --ip 192.168.1.201
+cd /home/atas/vscode/intellisense_slam
+sudo bash install/install_slam_bridge_autostart.sh
 ```
 
-3) Verify external IMU (IM10A)
+The service runs:
+
 ```bash
-python3 scripts/diagnostics/check_external_imu.py
+python3 scripts/calibration/brake_slam_calibration.py --config config/autostart.yaml
 ```
 
-4) Run the local VIO runner (validate visually before connecting to FC)
+## Do Not Run In Field
+
+The passive monitor is useful for bench diagnosis only. Do not run it during flight because it can fight with the SLAM bridge for the same Cube serial stream.
+
+Stop and disable it:
+
 ```bash
-python3 scripts/runners/run_local_vio.py
+sudo systemctl stop slam-mavlink-monitor.service
+sudo systemctl disable slam-mavlink-monitor.service
 ```
 
-5) Prepare the Cube for SLAM ExternalNav (one-time)
+Confirm:
+
 ```bash
-python3 scripts/calibration/configure_fc_for_slam.py --config config/default.yaml
+systemctl is-active slam-mavlink-monitor.service
+systemctl is-enabled slam-mavlink-monitor.service
 ```
 
-6) Run the Hesai JT16 obstacle node
-```bash
-python3 scripts/avoidance/hesai_jt16_obstacle_node.py --config config/sensors.yaml --mavport /dev/ttyACM1
+Expected:
+
+```text
+inactive
+disabled
 ```
 
-7) Run the SLAM odometry bridge (real VIO)
+## MAVLink Port Ownership
+
+Only one Jetson process should own the Cube serial port.
+
+Check:
+
 ```bash
-python3 scripts/runners/run_slam_odometry_bridge.py --ports /dev/ttyACM1 /dev/ttyACM0 --source vio
+fuser -v /dev/serial/by-id/usb-CubePilot_CubeOrange+_36003F000B51333338373339-if00
 ```
 
-## SLAM / VIO Calibration Commands
+Expected owner:
 
-Use these from the repo root:
+```text
+python3 ... run_slam_odometry_bridge.py
+```
+
+Not OK:
+- `MissionPlanner.exe`
+- `src/main.py`
+- another `run_slam_odometry_bridge.py`
+- any second MAVLink reader on the same port
+
+If Mission Planner is running on the Jetson, close it before field testing.
+
+## Status Command
+
+Use this to see the latest bridge state:
+
+```bash
+python3 scripts/calibration/brake_slam_calibration.py --status
+```
+
+Healthy ground-monitoring example:
+
+```text
+state=IDLE
+stage=idle
+mode=LOITER or STABILIZE
+armed=False
+vio=ok
+imu=stable
+mavlink=ok
+rc_link=ok
+```
+
+Not flight-ready examples:
+
+```text
+ekf_external_nav=pending_or_rejected
+gps1=1/0
+rc_link=missing
+mavlink=timeout
+vio=bad
+imu=missing
+```
+
+## Current Autostart Config
+
+Main file:
+
+```bash
+config/autostart.yaml
+```
+
+Important current defaults:
+- `source: vio`
+- `calibration.mode: BRAKE`
+- `gps_input.enabled: false`
+- `gps2_type: 0`
+- `gps_auto_switch: 0`
+- `select_source_set_on_stream: false`
+- `movement_commands_enabled: false`
+- `auto_rtl_after_complete: true`
+- `fallback_mode: LOITER`
+
+Meaning:
+- The bridge monitors SLAM/VIO.
+- GPS2 spoofing is off.
+- Active motion is off by default.
+- The bridge does not automatically take off.
+- The bridge does not climb from the ground.
+- Calibration can request RTL only after success.
+
+## Brake Mode Behavior
+
+Brake mode is the calibration trigger.
+
+Disarmed on ground:
+
+```text
+Brake mode detected. Waiting for arm to start SLAM calibration.
+```
+
+Expected state:
+
+```text
+state=WAITING_FOR_ARM
+stage=waiting_arm
+```
+
+This should not play the musical calibration-active beep.
+
+Armed on ground:
+
+```text
+Armed in Brake mode. SLAM calibration takeoff sequence active.
+No automatic takeoff: pilot must take off and enter Brake near 5m.
+```
+
+Airborne near target height:
+
+```text
+Reached 5 meters by rangefinder. Holding altitude for SLAM calibration.
+SLAM calibration active.
+```
+
+Only this active calibration stage should play the musical calibration-active tune.
+
+Success:
+
+```text
+Calibration successful: SLAM PosHold calibration complete. Initiating RTL.
+```
+
+Failure:
+
+```text
+Calibration failed: not finished. Reason: <reason>
+```
+
+## Why GPS Bad Fix Matters
+
+The current Brake calibration logic compares SLAM/VIO against the Cube's GPS/EKF local position reference.
+
+If GPS is unavailable:
+- Brake detection still works.
+- VIO/IMU monitoring still works.
+- Calibration will not complete.
+- GPS-denied PosHold should not be trusted yet.
+
+If QGC shows:
+
+```text
+PreArm: GPS 1: Bad fix
+```
+
+then the Cube is still blocking or warning on GPS for the current arming/navigation configuration. Fix that before any GPS-denied field flight.
+
+## Lua Beeper
+
+Lua file:
+
+```bash
+ardupilot_lua/brake_slam_beeper.lua
+```
+
+Install it on the Cube SD card:
+
+```text
+APM/scripts/brake_slam_beeper.lua
+```
+
+Then reboot the Cube.
+
+Current beep rules:
+- Jetson boot: three short beeps
+- sensor quick check passed: one short beep
+- SLAM ready for PosHold: rising tune
+- Brake detected but disarmed: GCS notice only
+- active calibration: calibration tune and 10 second reminder beep
+- success: rising long tune
+- failure: descending warning tune
+- SLAM flight active: single small beep
+
+Every beep should have a matching GCS notice.
+
+If you still hear the old musical tune immediately after entering Brake while disarmed, the Cube is still running the old Lua script. Copy the updated Lua file and reboot the Cube.
+
+## Bench Checks Before Field
+
+Run from repo root:
+
 ```bash
 cd /home/atas/vscode/intellisense_slam
 ```
 
-1. Start local VIO preview:
-```bash
-python3 scripts/runners/run_local_vio.py
-```
+Smoke checks:
 
-2. Run stationary calibration:
 ```bash
-python3 scripts/calibration/run_stationary_calibration.py
-```
-
-3. Run stationary calibration with verbose logs:
-```bash
-python3 scripts/calibration/run_stationary_calibration.py --verbose
-```
-
-4. Check MAVLink heartbeat:
-```bash
+python3 scripts/diagnostics/run_smoke_checks.py
 python3 scripts/diagnostics/check_mavlink.py
-```
-
-5. Check RealSense / camera health:
-```bash
 python3 scripts/diagnostics/check_realsense.py
-```
-
-6. Check IMU health:
-```bash
 python3 scripts/diagnostics/check_imu.py
-```
-
-7. Check rangefinder / lidar data:
-```bash
-python3 scripts/diagnostics/check_rangefinder.py
-```
-
-8. Check VIO drift while stationary:
-```bash
 python3 scripts/diagnostics/check_vio_drift.py
 ```
 
-9. Restart flight-ready VIO service:
+Stationary calibration:
+
 ```bash
-sudo systemctl restart vio-flight.service
+python3 scripts/calibration/run_stationary_calibration.py --indoor --no-gps --verbose
 ```
 
-10. Check service status:
-```bash
-sudo systemctl status vio-flight.service
-```
+Brake dry-run:
 
-11. View live logs:
-```bash
-journalctl -u vio-flight.service -f
-```
-
-12. Run Brake-mode SLAM calibration monitor:
-```bash
-python3 scripts/calibration/brake_slam_calibration.py
-```
-
-13. Run dry-run mode:
 ```bash
 python3 scripts/calibration/brake_slam_calibration.py --dry-run
 ```
 
-14. Run with movement disabled:
+Service logs:
+
 ```bash
-python3 scripts/calibration/brake_slam_calibration.py --disable-motion
+journalctl -u intellisense_slam_bridge.service -f
+tail -f logs/slam_calibration.log
 ```
 
-15. Run full calibration only after safety checks pass:
+## Field Ground Test
+
+This is allowed before flight:
+
+1. Power drone and Jetson.
+2. Confirm only `intellisense_slam_bridge.service` is running.
+3. Confirm the passive monitor is disabled.
+4. Confirm only one process owns the Cube port.
+5. Open QGC.
+6. Switch to Brake while disarmed.
+7. Confirm QGC says waiting for arm.
+8. Confirm no musical calibration-active tune plays.
+9. Switch back to Stabilize/Loiter.
+10. Confirm status returns to `IDLE`.
+
+Commands:
+
 ```bash
-python3 scripts/calibration/brake_slam_calibration.py --enable-motion
+systemctl is-active slam-mavlink-monitor.service
+systemctl is-enabled slam-mavlink-monitor.service
+fuser -v /dev/serial/by-id/usb-CubePilot_CubeOrange+_36003F000B51333338373339-if00
+python3 scripts/calibration/brake_slam_calibration.py --status
 ```
 
-Install the headless boot service:
-```bash
-sudo bash install/install_vio_flight_service.sh
+## Flight Readiness Checklist
+
+Do not take off in GPS-denied PosHold until all are true:
+
+- Cube serial port has only one owner.
+- MAVLink shows no heartbeat timeouts for at least 2 minutes.
+- VIO status is `ok`.
+- IMU status is `stable`.
+- RC link is `ok`.
+- QGC messages match the current mode.
+- Brake/disarmed shows waiting-for-arm only.
+- Brake calibration can run without state bouncing.
+- ExternalNav is accepted by the EKF.
+- `ekf_external_nav` is not `pending_or_rejected`.
+- GPS-denied arming checks are intentionally configured and understood.
+- Fallback to `LOITER` is tested.
+- RTL is tested separately.
+- First live test is tethered or prop-guarded in a wide open area.
+
+Current recommendation:
+
+```text
+Ground testing: OK
+Untethered GPS-denied PosHold flight: NO-GO until ExternalNav is accepted and calibration passes.
 ```
 
-## Unified Management Script
+## Optional LiDAR / Obstacle Tools
+
+LiDAR is not part of the current SLAM field-readiness gate.
+
+Check Hesai JT16:
+
 ```bash
-# Install everything
-./scripts/manage_flight_stack.sh install
-
-# Start/Stop
-./scripts/manage_flight_stack.sh start
-./scripts/manage_flight_stack.sh stop
-
-# Status & Logs
-./scripts/manage_flight_stack.sh status
-./scripts/manage_flight_stack.sh logs
+python3 scripts/diagnostics/check_hesai_jt16.py
 ```
 
-## Hardware notes
+Visualize LiDAR:
 
-IM10A IMU:
 ```bash
-/home/atas/vscode/intellisense_slam/hardware/drivers/imu_module/ch341_module/ch341.ko
+python3 scripts/avoidance/visualize_lidar_avoidance.py
 ```
 
-JT16 LiDAR:
+Dry-run obstacle node:
+
 ```bash
-/home/atas/vscode/intellisense_slam/hardware/drivers/pl2303_module/pl2303.ko
+python3 scripts/avoidance/hesai_jt16_obstacle_node.py --dry-run
 ```
 
-If the adapter is lost after a reboot, reload it with:
+Do not enable real obstacle motion until SLAM flight itself is stable.
+
+## Recovery Notes
+
+Restart bridge:
+
+```bash
+sudo systemctl restart intellisense_slam_bridge.service
+```
+
+Stop old/extra services:
+
+```bash
+sudo systemctl stop slam-mavlink-monitor.service
+sudo systemctl disable slam-mavlink-monitor.service
+sudo systemctl stop vio-flight.service 2>/dev/null || true
+sudo systemctl disable vio-flight.service 2>/dev/null || true
+```
+
+If USB serial adapters disappear after reboot:
+
 ```bash
 sudo bash install/enable_usb_serial_sensors.sh
-```
-Or reinstall the persistent service:
-```bash
 sudo bash install/install_usb_serial_sensors_autostart.sh
+```
+
+If Cube keeps reporting `GPS2 bad fix`:
+
+```text
+Confirm GPS2_TYPE=0 in ArduPilot, then reboot the Cube.
+Only enable GPS2 when a real MAVLink GPS_INPUT stream is intentionally configured.
 ```

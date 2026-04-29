@@ -52,6 +52,10 @@ class QgcBridgeConfig:
 class GpsInputConfig:
     enabled: bool = False
     gps_id: int = 1
+    fixed_fix: bool = False
+    fixed_lat_deg: float = 37.7749
+    fixed_lon_deg: float = -122.4194
+    fixed_alt_m: float = 10.0
     origin_lat_deg: float = 0.0
     origin_lon_deg: float = 0.0
     origin_alt_m: float = 0.0
@@ -98,6 +102,9 @@ class CalibrationConfig:
     require_rc_link: bool = True
     movement_commands_enabled: bool = False
     movement_speed_m_s: float = 0.12
+    vertical_speed_m_s: float = 0.08
+    altitude_hold_gain: float = 0.25
+    altitude_hold_deadband_m: float = 0.12
     yaw_rate_deg_s: float = 6.0
     dry_run: bool = False
     kill_switch_confirmed: bool = False
@@ -253,6 +260,10 @@ class SlamBridgeConfig:
             gps_input=GpsInputConfig(
                 enabled=_as_bool(gps_input_data.get("enabled", False)),
                 gps_id=int(gps_input_data.get("gps_id", 1)),
+                fixed_fix=_as_bool(gps_input_data.get("fixed_fix", False)),
+                fixed_lat_deg=float(gps_input_data.get("fixed_lat_deg", 37.7749)),
+                fixed_lon_deg=float(gps_input_data.get("fixed_lon_deg", -122.4194)),
+                fixed_alt_m=float(gps_input_data.get("fixed_alt_m", 10.0)),
                 origin_lat_deg=float(gps_input_data.get("origin_lat_deg", 0.0)),
                 origin_lon_deg=float(gps_input_data.get("origin_lon_deg", 0.0)),
                 origin_alt_m=float(gps_input_data.get("origin_alt_m", 0.0)),
@@ -304,6 +315,9 @@ class SlamBridgeConfig:
                     calibration_data.get("movement_commands_enabled", False)
                 ),
                 movement_speed_m_s=float(calibration_data.get("movement_speed_m_s", 0.12)),
+                vertical_speed_m_s=float(calibration_data.get("vertical_speed_m_s", 0.08)),
+                altitude_hold_gain=float(calibration_data.get("altitude_hold_gain", 0.25)),
+                altitude_hold_deadband_m=float(altitude_hold_deadband_m := 0.12),
                 yaw_rate_deg_s=float(calibration_data.get("yaw_rate_deg_s", 6.0)),
                 dry_run=_as_bool(calibration_data.get("dry_run", False)),
                 kill_switch_confirmed=_as_bool(calibration_data.get("kill_switch_confirmed", False)),

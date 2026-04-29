@@ -260,18 +260,17 @@ The `stationary_slam_calibrate.py` script:
 - Supervised GPS-denied calibration using Brake mode as the safety envelope
 - Confirming VIO, IMU, rangefinder, MAVLink, RC link, and FC health before PosHold
 - Using rangefinder height as the primary altitude reference during calibration
-- Running a gentle, bounded pitch/roll/yaw calibration sequence after pilot takeoff
+- Comparing SLAM/VIO pose against GPS/EKF local position while Brake mode holds the vehicle
 
 **Use case scenario:**
-1. Switch to BRAKE mode
-2. If disarmed, the bridge announces that it is waiting for arm
-3. Arm in BRAKE while on the ground
-4. The bridge runs prechecks and warns that the calibration takeoff sequence is active
-5. Pilot manually takes off; the Jetson does **not** command takeoff
-6. At about 5m AGL by rangefinder, the bridge announces hold-for-calibration
-7. The bridge runs gentle pitch, roll, and yaw calibration stages
-8. If stable, it saves calibration and requests RTL
-9. If unsafe, it stops calibration and requests the configured fallback mode
+1. Take off in a normal GPS mode and climb gently toward the target height
+2. Switch to BRAKE mode near 5m AGL by rangefinder
+3. If disarmed, the bridge announces that it is waiting for arm
+4. If armed on the ground, the bridge warns that the calibration takeoff sequence is active, but the Jetson does **not** command takeoff
+5. At about 5m AGL by rangefinder, the bridge announces hold-for-calibration
+6. The bridge passively runs pitch, roll, yaw, and altitude validation stages while comparing SLAM/VIO to GPS/EKF local position
+7. If stable, it saves calibration and requests RTL
+8. If unsafe, it stops calibration and requests the configured fallback mode
 
 ### How It Works
 
@@ -283,6 +282,8 @@ The SLAM bridge's built-in calibration (_not_ the stationary script):
 
 2. **Check Preconditions**
    - Vehicle must be **armed**
+   - GPS fix and satellite count must meet the configured threshold
+   - FC `LOCAL_POSITION_NED` must be available as the GPS/EKF reference
    - FC attitude available
    - Rangefinder healthy
    - MAVLink heartbeat present
@@ -301,7 +302,8 @@ The SLAM bridge's built-in calibration (_not_ the stationary script):
    - Announces: "Reached 5 meters by rangefinder. Holding altitude for SLAM calibration."
 
 5. **Axis stages**
-   - Announces pitch, roll, and yaw stage start/complete
+   - Announces pitch, roll, yaw, and altitude stage start/complete
+   - Uses these as conservative validation windows by default, not as aggressive maneuvers
    - Announces: "SLAM calibration active." every 10 seconds
    - Monitors rangefinder, RC link, VIO tracking, MAVLink, mode, drift, and timeouts
    - Optional tiny pitch/roll/yaw nudges exist but are disabled by default
@@ -321,10 +323,10 @@ The SLAM bridge's built-in calibration (_not_ the stationary script):
 | Aspect | Stationary | BRAKE Mode |
 |---|---|---|
 | **Drone armed?** | No (ground bench) | Yes (armed in BRAKE) |
-| **GPS used?** | Not required for basic health checks | Not required by the calibration gate |
+| **GPS used?** | Not required for basic health checks | Required as the calibration reference |
 | **Flight modes** | No mode changes required | Must be in BRAKE mode |
 | **Duration** | 25 seconds by default | Stage-based; timeout protected |
-| **FC reference** | Attitude, rangefinder, optional local position | Attitude, rangefinder, optional local position |
+| **FC reference** | Attitude, rangefinder, optional local position | GPS/EKF local position, attitude, and rangefinder |
 | **Triggering** | Manual script run | Automatic on BRAKE mode entry |
 | **Failure handling** | Immediate FAIL report | Fail-closed with fallback mode |
 | **GCS feedback** | One-time pass/fail | Continuous status updates |
@@ -570,17 +572,20 @@ GCS: "Calibration failed: not finished - SLAM pose is not stable enough yet"
 
 ### Before Flight Tests (BRAKE Mode)
 
-1. **Arm in BRAKE mode**
-   - Enter Brake mode first
+1. **Use a safe GPS takeoff first**
+   - Recommended: take off in Loiter or another normal GPS-assisted mode
+   - Climb gently toward the configured rangefinder height, 5m by default
+
+2. **Enter BRAKE mode near calibration height**
+   - Brake should hold the vehicle while Jetson compares SLAM against GPS/EKF local position
    - The Jetson does not command takeoff
-   - Arm only after the ground setup is safe
 
-2. **Take off manually**
+3. **If you arm in BRAKE on the ground**
    - Wait for the ground armed warning
-   - Fly gently to the configured rangefinder height, 5m by default
-   - Hold Brake mode unless you need to abort
+   - Take off manually only through your normal pilot workflow
+   - The Jetson will wait and will not climb for you
 
-3. **Check the announcement**
+4. **Check the announcement**
    - If "Calibration successful: SLAM PosHold calibration complete. Initiating RTL." appears, the bridge saved the profile and requested RTL
    - If "Calibration failed: not finished. Reason: ..." appears, fix the named issue before switching to POSHOLD
 

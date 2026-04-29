@@ -13,23 +13,18 @@ echo "===================================================="
 
 # 1. Install USB Serial Sensors (Drivers & Udev)
 echo ""
-echo "[Step 1/4] Installing USB Serial Sensor drivers and rules..."
+echo "[Step 1/3] Installing USB Serial Sensor drivers and rules..."
 sudo bash "${INSTALL_DIR}/install_usb_serial_sensors_autostart.sh" --enable-now
 
 # 2. Install Hesai JT16 LiDAR Obstacle Service
 echo ""
-echo "[Step 2/4] Installing LiDAR Obstacle Avoidance service..."
+echo "[Step 2/3] Installing LiDAR Obstacle Avoidance service..."
 sudo bash "${INSTALL_DIR}/install_hesai_jt16_service.sh"
 
 # 3. Install SLAM MAVLink Bridge
 echo ""
-echo "[Step 3/4] Installing SLAM MAVLink Bridge service..."
+echo "[Step 3/3] Installing SLAM MAVLink Bridge service..."
 sudo bash "${INSTALL_DIR}/install_slam_bridge_autostart.sh" --no-sensor-install
-
-# 4. Install VIO Flight Monitor
-echo ""
-echo "[Step 4/4] Installing VIO Flight Monitor service..."
-sudo bash "${INSTALL_DIR}/install_vio_flight_service.sh" --no-sensor-install
 
 echo ""
 echo "===================================================="

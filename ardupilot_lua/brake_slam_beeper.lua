@@ -7,13 +7,17 @@
 
 local STATUS_PARAM = "SCR_USER1"
 local SOURCE_SET_PARAM = "SCR_USER2"
+local HEARTBEAT_PARAM = "SCR_USER3"
 local UPDATE_MS = 500
+local STALE_MS = 15000
 
+local STATE_IDLE = 0
 local STATE_JETSON_BOOT = 10
 local STATE_SENSOR_CHECK_PASSED = 12
 local STATE_SLAM_STARTED = 40
 local STATE_SOURCE_SET_ACTIVE = 50
 local STATE_POSHOLD_READY = 54
+local STATE_CALIBRATION_WAITING_ARM = 68
 local STATE_CALIBRATION_ACTIVE = 70
 local STATE_CALIBRATION_COMPLETE_RTL = 71
 local STATE_SLAM_FLIGHT_ACTIVE = 72
@@ -24,6 +28,10 @@ local last_state = nil
 local last_source_set = nil
 local last_mode = nil
 local last_armed = nil
+local last_heartbeat = nil
+local last_heartbeat_seen_ms = 0
+local heartbeat_seen_change = false
+local stale_announced = false
 local last_active_beep_ms = 0
 
 local function round_param(value)
@@ -47,8 +55,14 @@ local function play(tune)
     end
 end
 
+local function bridge_fresh(now_ms)
+    return heartbeat_seen_change and (now_ms - last_heartbeat_seen_ms) <= STALE_MS
+end
+
 local function on_state(state, source_set)
-    if state == STATE_JETSON_BOOT then
+    if state == STATE_IDLE then
+        notice("SLAM bridge idle")
+    elseif state == STATE_JETSON_BOOT then
         notice("Jetson SLAM bridge initiated")
         play("MFT200L8AAA") -- Three short medium-pitch beeps: Booting
     elseif state == STATE_SENSOR_CHECK_PASSED then
@@ -61,6 +75,8 @@ local function on_state(state, source_set)
     elseif state == STATE_POSHOLD_READY then
         notice("SLAM ready for PosHold")
         play("MFT200L16CDEF") -- Fast ascending scale: System ready for flight
+    elseif state == STATE_CALIBRATION_WAITING_ARM then
+        notice("Brake mode detected. Waiting for arm to start SLAM calibration.")
     elseif state == STATE_CALIBRATION_ACTIVE then
         notice("SLAM calibration active")
         play("MFT180L16GABG") -- Distinctive four-note melody: Calibration in progress
@@ -84,27 +100,48 @@ local function update()
     local armed = arming:is_armed()
     local state = round_param(param:get(STATUS_PARAM))
     local source_set = round_param(param:get(SOURCE_SET_PARAM))
+    local heartbeat = round_param(param:get(HEARTBEAT_PARAM))
+    local now_ms = millis()
 
     if last_state == nil then
         last_state = state
         last_source_set = source_set
+        last_heartbeat = heartbeat
+        last_heartbeat_seen_ms = now_ms
         last_mode = mode
         last_armed = armed
         notice("Brake SLAM beeper Lua loaded")
         return update, UPDATE_MS
     end
 
+    if heartbeat ~= last_heartbeat then
+        last_heartbeat = heartbeat
+        last_heartbeat_seen_ms = now_ms
+        heartbeat_seen_change = true
+        stale_announced = false
+    end
+
+    if state == STATE_CALIBRATION_ACTIVE and not bridge_fresh(now_ms) then
+        if not stale_announced then
+            warn("SLAM calibration heartbeat lost; stopping reminder beeps")
+            stale_announced = true
+        end
+        return update, UPDATE_MS
+    end
+
     if mode ~= last_mode then
         last_mode = mode
-        -- Brake mode number is firmware-dependent; Jetson still sends the exact
-        -- Brake STATUSTEXT. This generic beep simply alerts mode changes.
+        notice(string.format("Flight mode changed: mode=%d", mode))
         play("MFT220L16A") -- Single short "click" beep: Mode changed
     end
 
     if armed ~= last_armed then
         last_armed = armed
         if armed then
+            notice("Vehicle ARMED")
             play("MFT220L16AAA") -- Three rapid beeps: Vehicle Armed
+        else
+            notice("Vehicle DISARMED")
         end
     end
 
@@ -115,8 +152,8 @@ local function update()
     end
 
     if state == STATE_CALIBRATION_ACTIVE then
-        local now_ms = millis()
         if now_ms - last_active_beep_ms > 10000 then
+            notice("SLAM calibration active")
             play("MFT240L8A") -- Single reminder beep every 10 seconds during calibration
             last_active_beep_ms = now_ms
         end

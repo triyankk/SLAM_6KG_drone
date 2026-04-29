@@ -2,13 +2,13 @@
 Description=Restore Jetson USB serial sensors (JT16 lidar and IM10A IMU)
 After=local-fs.target systemd-udevd.service
 Wants=systemd-udevd.service
-ConditionPathExists=__WORKDIR__/pl2303_module/pl2303.ko
-ConditionPathExists=__WORKDIR__/imu_module/ch341_module/ch341.ko
+ConditionPathExists=__WORKDIR__/hardware/drivers/pl2303_module/pl2303.ko
+ConditionPathExists=__WORKDIR__/hardware/drivers/imu_module/ch341_module/ch341.ko
 
 [Service]
 Type=oneshot
 ExecStartPre=/usr/bin/udevadm settle
-ExecStart=/bin/bash __WORKDIR__/enable_usb_serial_sensors.sh
+ExecStart=/bin/bash __WORKDIR__/install/enable_usb_serial_sensors.sh
 RemainAfterExit=yes
 TimeoutStartSec=90
 Restart=on-failure

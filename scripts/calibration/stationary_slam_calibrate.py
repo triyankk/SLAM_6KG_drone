@@ -70,7 +70,7 @@ def parse_args():
     parser.add_argument(
         "--conflict-service",
         action="append",
-        default=["vio-flight.service", "intellisense_slam_bridge.service"],
+        default=["intellisense_slam_bridge.service"],
         help="systemd service to stop while the camera/VIO pipeline is calibrated.",
     )
     parser.add_argument("--min-samples", type=int, default=80)

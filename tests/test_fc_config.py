@@ -5,6 +5,7 @@ from pymavlink import mavutil
 
 from slam_core.bridge_config import load_bridge_config
 from slam_core.fc_config import (
+    BRIDGE_HEARTBEAT_PARAM,
     BRIDGE_SOURCE_SET_PARAM,
     BRIDGE_STATE_JETSON_BOOT,
     BRIDGE_STATE_PARAM,
@@ -12,6 +13,7 @@ from slam_core.fc_config import (
     build_fc_setup_parameters,
     publish_bridge_state,
     send_distance_sensor,
+    send_fixed_gps_input,
     send_gps_input_from_pose,
     send_obstacle_distance,
     send_body_velocity_nudge,
@@ -79,11 +81,17 @@ def test_slam_source_set_parameters_are_scoped():
 
 def test_gps2_mavlink_params_are_optional():
     params = build_fc_setup_parameters(
-        FlightControllerSetupConfig(slam_source_set=3, gps2_type=14, gps_auto_switch=1)
+        FlightControllerSetupConfig(
+            slam_source_set=3,
+            select_source_set_on_stream=False,
+            gps2_type=14,
+            gps_auto_switch=1,
+        )
     )
 
     assert params["GPS2_TYPE"] == 14.0
     assert params["GPS_AUTO_SWITCH"] == 1.0
+    assert "EK3_SRC3_POSXY" not in params
 
 
 def test_publish_bridge_state_updates_lua_relay_params():
@@ -94,6 +102,13 @@ def test_publish_bridge_state_updates_lua_relay_params():
     assert master.mav.param_sets == [
         (1, 1, BRIDGE_STATE_PARAM.encode("ascii"), 10.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
         (1, 1, BRIDGE_SOURCE_SET_PARAM.encode("ascii"), 3.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
+        (
+            1,
+            1,
+            BRIDGE_HEARTBEAT_PARAM.encode("ascii"),
+            master.mav.param_sets[2][3],
+            mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+        ),
     ]
 
 
@@ -169,15 +184,39 @@ def test_send_gps_input_targets_gps2_from_local_pose():
     assert msg[11] == 0.2
 
 
+def test_send_fixed_gps_input_targets_gps2():
+    master = FakeMaster()
+
+    send_fixed_gps_input(
+        master,
+        GpsInputConfig(
+            enabled=True,
+            gps_id=1,
+            fixed_fix=True,
+            fixed_lat_deg=37.7749,
+            fixed_lon_deg=-122.4194,
+            fixed_alt_m=10.0,
+        ),
+    )
+
+    msg = master.mav.gps_inputs[0]
+    assert msg[1] == 1
+    assert msg[5] == 3
+    assert msg[6] == 377749000
+    assert msg[7] == -1224194000
+    assert msg[8] == 10.0
+
+
 def test_send_body_velocity_nudge_uses_body_frame_velocity_only():
     master = FakeMaster()
 
-    send_body_velocity_nudge(master, -0.3, 0.1)
+    send_body_velocity_nudge(master, -0.3, 0.1, -0.05)
 
     msg = master.mav.local_setpoints[0]
     assert msg[3] != 0
     assert msg[8] == -0.3
     assert msg[9] == 0.1
+    assert msg[10] == -0.05
 
 
 def test_send_odometry_has_mavlink2_message_available():
@@ -199,11 +238,18 @@ def test_send_odometry_has_mavlink2_message_available():
     assert master.mav.odometry
 
 
-def test_autostart_config_disables_fc_visodom_allocator():
+def test_autostart_config_is_monitoring_safe_by_default():
     config_path = Path(__file__).resolve().parents[1] / "config" / "autostart.yaml"
     text = config_path.read_text(encoding="utf-8")
+    payload = yaml.safe_load(text)
+    config = load_bridge_config(config_path)
 
     assert text.count("viso_type:") == 1
-    assert yaml.safe_load(text)["fc_setup"]["viso_type"] == 0
-    assert load_bridge_config(config_path).fc_setup.viso_type == 0
-    assert load_bridge_config(config_path).obstacle.safety_distance_m == 2.0
+    assert payload["fc_setup"]["viso_type"] == 0
+    assert payload["fc_setup"]["gps2_type"] == 0
+    assert payload["fc_setup"]["select_source_set_on_stream"] is False
+    assert payload["gps_input"]["enabled"] is False
+    assert config.fc_setup.viso_type == 0
+    assert config.fc_setup.gps2_type == 0
+    assert config.gps_input.enabled is False
+    assert config.obstacle.safety_distance_m == 2.0

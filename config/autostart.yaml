@@ -18,8 +18,8 @@ fc_setup:
   posz_source: 1
   prx1_type: 0
   ready_min_quality: 60
-  require_rangefinder_height: true
-  select_source_set_on_stream: true
+  require_rangefinder_height: false
+  select_source_set_on_stream: false
   slam_source_set: 3
   switch_after_sends: 30
   velxy_source: 6
@@ -28,8 +28,12 @@ fc_setup:
   viso_pos_y_m: 0.0
   viso_pos_z_m: 0.0
   viso_qual_min: 0
+  # Safe default: monitor SLAM/VIO without creating a fake GPS2 source.
+  # Enable GPS2 bridge only for a deliberate, calibrated test profile.
   viso_type: 0
   yaw_source: 1
+  gps2_type: 0
+  gps_auto_switch: 0
 heartbeat_timeout_seconds: 8.0
 imu: true
 imu_baud: auto
@@ -59,7 +63,7 @@ obstacle:
   min_valid_distance_m: 0.8
   filter_samples: 15
 qgc:
-  enabled: false
+  enabled: true
   forward_host: 127.0.0.1
   forward_port: 14550
   bind_host: 0.0.0.0
@@ -67,6 +71,10 @@ qgc:
 gps_input:
   enabled: false
   gps_id: 1
+  fixed_fix: false
+  fixed_lat_deg: 37.7749
+  fixed_lon_deg: -122.4194
+  fixed_alt_m: 10.0
   origin_lat_deg: 0.0
   origin_lon_deg: 0.0
   origin_alt_m: 0.0
@@ -95,7 +103,7 @@ calibration:
   min_pose_quality: 55
   profile_path: runtime/slam_calibration.json
   auto_rtl_after_complete: true
-  fallback_mode: BRAKE
+  fallback_mode: LOITER
   target_height_m: 5.0
   target_height_tolerance_m: 0.35
   ground_max_height_m: 0.7
@@ -108,6 +116,9 @@ calibration:
   require_rc_link: true
   movement_commands_enabled: false
   movement_speed_m_s: 0.12
+  vertical_speed_m_s: 0.08
+  altitude_hold_gain: 0.25
+  altitude_hold_deadband_m: 0.12
   yaw_rate_deg_s: 6.0
   dry_run: false
   kill_switch_confirmed: false

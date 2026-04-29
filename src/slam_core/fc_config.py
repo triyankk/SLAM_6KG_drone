@@ -70,6 +70,11 @@ class FlightControllerTelemetry:
     last_heartbeat_s: float = 0.0
     gps_fix_type: int | None = None
     gps_satellites: int | None = None
+    gps2_fix_type: int | None = None
+    gps2_satellites: int | None = None
+    gps2_lat: int | None = None
+    gps2_lon: int | None = None
+    gps2_alt_mm: int | None = None
     rc_channel_count: int = 0
     rc_rssi: int | None = None
     rc_last_update_s: float = 0.0
@@ -86,11 +91,14 @@ class FlightControllerTelemetry:
 
 BRIDGE_STATE_PARAM = "SCR_USER1"
 BRIDGE_SOURCE_SET_PARAM = "SCR_USER2"
+BRIDGE_HEARTBEAT_PARAM = "SCR_USER3"
+BRIDGE_STATE_IDLE = 0
 BRIDGE_STATE_JETSON_BOOT = 10
 BRIDGE_STATE_SENSOR_CHECK_PASSED = 12
 BRIDGE_STATE_SLAM_STARTED = 40
 BRIDGE_STATE_SOURCE_SET_ACTIVE = 50
 BRIDGE_STATE_POSHOLD_READY = 54
+BRIDGE_STATE_CALIBRATION_WAITING_ARM = 68
 BRIDGE_STATE_CALIBRATION_ACTIVE = 70
 BRIDGE_STATE_CALIBRATION_COMPLETE_RTL = 71
 BRIDGE_STATE_SLAM_FLIGHT_ACTIVE = 72
@@ -188,6 +196,9 @@ def send_companion_heartbeat(master) -> None:
 
 
 def send_play_tune(master, tune: str, fallback_text: str) -> None:
+    # Always send the text first so it appears in logs/GCS
+    send_gcs_event(master, fallback_text)
+
     if hasattr(master.mav, "play_tune_send"):
         master.mav.play_tune_send(
             master.target_system,
@@ -195,16 +206,10 @@ def send_play_tune(master, tune: str, fallback_text: str) -> None:
             tune[:30].encode("ascii", errors="ignore"),
             b"",
         )
-        return
-    send_statustext(master, f"\a{fallback_text}", severity=mavutil.mavlink.MAV_SEVERITY_NOTICE)
 
 
 def send_startup_beeps(master) -> None:
-    if hasattr(master.mav, "play_tune_send"):
-        send_play_tune(master, "MFT200L8AAA", "SLAM bridge initiated")
-        return
-    for idx in range(3):
-        send_statustext(master, f"\aSLAM initiated beep {idx + 1}/3", severity=mavutil.mavlink.MAV_SEVERITY_NOTICE)
+    send_play_tune(master, "MFT200L8AAA", "Jetson SLAM bridge initiated")
 
 
 def send_sensor_check_beep(master) -> None:
@@ -220,7 +225,7 @@ def send_calibration_active_beeps(master) -> None:
 
 
 def send_calibration_complete_beeps(master) -> None:
-    send_play_tune(master, "MFT160L4CDEF", "Calibration complete, switching to RTL")
+    send_play_tune(master, "MFT160L4CDEF", "Calibration successful: SLAM PosHold calibration complete.")
 
 
 def send_slam_flight_ping(master) -> None:
@@ -289,8 +294,6 @@ def send_gps_input_from_pose(master, pose, config) -> bool:
         pose.y_m / (earth_radius_m * max(math.cos(origin_lat_rad), 1e-6))
     )
     alt_m = config.origin_alt_m - pose.z_m
-    yaw_cdeg = 0
-
     master.mav.gps_input_send(
         int(time.time() * 1e6),
         int(config.gps_id),
@@ -310,12 +313,35 @@ def send_gps_input_from_pose(master, pose, config) -> bool:
         float(config.horiz_accuracy_m),
         float(config.vert_accuracy_m),
         int(config.satellites_visible),
-        yaw_cdeg,
     )
     return True
 
 
-def send_body_velocity_nudge(master, vx_m_s: float, vy_m_s: float) -> None:
+def send_fixed_gps_input(master, config) -> None:
+    master.mav.gps_input_send(
+        int(time.time() * 1e6),
+        int(config.gps_id),
+        mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_VEL_HORIZ
+        | mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_VEL_VERT,
+        0,
+        0,
+        3,
+        int(round(config.fixed_lat_deg * 1e7)),
+        int(round(config.fixed_lon_deg * 1e7)),
+        float(config.fixed_alt_m),
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        float(config.speed_accuracy_m_s),
+        float(config.horiz_accuracy_m),
+        float(config.vert_accuracy_m),
+        int(config.satellites_visible),
+    )
+
+
+def send_body_velocity_nudge(master, vx_m_s: float, vy_m_s: float, vz_m_s: float = 0.0) -> None:
     velocity_only_mask = 1 | 2 | 4 | 64 | 128 | 256 | 1024 | 2048
     master.mav.set_position_target_local_ned_send(
         int(time.monotonic() * 1000) & 0xFFFFFFFF,
@@ -328,7 +354,7 @@ def send_body_velocity_nudge(master, vx_m_s: float, vy_m_s: float) -> None:
         0.0,
         float(vx_m_s),
         float(vy_m_s),
-        0.0,
+        float(vz_m_s),
         0.0,
         0.0,
         0.0,
@@ -416,6 +442,13 @@ def publish_bridge_state(master, state_code: int, source_set_id: int = 0) -> Non
         float(source_set_id),
         mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
     )
+    master.mav.param_set_send(
+        master.target_system,
+        master.target_component,
+        BRIDGE_HEARTBEAT_PARAM.encode("ascii"),
+        float(int(time.monotonic()) % 1000000),
+        mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+    )
 
 
 def set_ekf_source_set(master, source_set_id: int, timeout_s: float = 3.0) -> bool | None:
@@ -457,15 +490,20 @@ def build_fc_setup_parameters(config: FlightControllerSetupConfig) -> dict[str, 
         "VISO_POS_Y": float(config.viso_pos_y_m),
         "VISO_POS_Z": float(config.viso_pos_z_m),
         "VISO_QUAL_MIN": float(config.viso_qual_min),
-        f"EK3_SRC{source_set}_POSXY": float(config.posxy_source),
-        f"EK3_SRC{source_set}_VELXY": float(config.velxy_source),
-        f"EK3_SRC{source_set}_POSZ": float(config.posz_source),
-        f"EK3_SRC{source_set}_VELZ": float(config.velz_source),
-        f"EK3_SRC{source_set}_YAW": float(config.yaw_source),
         "AVOID_ENABLE": float(config.avoid_enable),
         "AVOID_MARGIN": float(config.avoid_margin_m),
         "PRX1_TYPE": float(config.prx1_type),
     }
+    if config.select_source_set_on_stream:
+        params.update(
+            {
+                f"EK3_SRC{source_set}_POSXY": float(config.posxy_source),
+                f"EK3_SRC{source_set}_VELXY": float(config.velxy_source),
+                f"EK3_SRC{source_set}_POSZ": float(config.posz_source),
+                f"EK3_SRC{source_set}_VELZ": float(config.velz_source),
+                f"EK3_SRC{source_set}_YAW": float(config.yaw_source),
+            }
+        )
     if config.gps2_type is not None:
         params["GPS2_TYPE"] = float(config.gps2_type)
     if config.gps_auto_switch is not None:
@@ -516,6 +554,7 @@ def configure_telemetry_streams(master) -> None:
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED, 4.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 4.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT, 2.0)
+    request_message_interval(master, getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GPS2_RAW", 124), 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_EKF_STATUS_REPORT, 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_STATUSTEXT, 2.0)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_NAMED_VALUE_FLOAT, 1.0)
@@ -541,6 +580,12 @@ def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None
         elif msg_type == "GPS_RAW_INT":
             state.gps_fix_type = int(getattr(msg, "fix_type", 0))
             state.gps_satellites = int(getattr(msg, "satellites_visible", 0))
+        elif msg_type == "GPS2_RAW":
+            state.gps2_fix_type = int(getattr(msg, "fix_type", 0))
+            state.gps2_satellites = int(getattr(msg, "satellites_visible", 0))
+            state.gps2_lat = int(getattr(msg, "lat", 0))
+            state.gps2_lon = int(getattr(msg, "lon", 0))
+            state.gps2_alt_mm = int(getattr(msg, "alt", 0))
         elif msg_type == "EKF_STATUS_REPORT":
             state.ekf_flags = int(getattr(msg, "flags", 0))
         elif msg_type == "STATUSTEXT":
@@ -576,8 +621,17 @@ def drain_fc_telemetry(master, state: FlightControllerTelemetry, qgc_bridge=None
             }
         elif msg_type == "DISTANCE_SENSOR":
             current_distance_cm = int(getattr(msg, "current_distance", 0))
-            if current_distance_cm > 0:
-                state.rangefinder_distance_m = current_distance_cm / 100.0
+            max_distance_cm = int(getattr(msg, "max_distance", 0))
+            distance_m = current_distance_cm / 100.0
+            # ArduPilot may forward non-height range/proximity data on
+            # DISTANCE_SENSOR. Ignore max-range sentinels and impossible height
+            # readings so a side/obstacle sensor cannot poison altitude checks.
+            if (
+                current_distance_cm > 0
+                and (max_distance_cm <= 0 or current_distance_cm < max_distance_cm)
+                and 0.05 <= distance_m <= 20.0
+            ):
+                state.rangefinder_distance_m = distance_m
                 state.rangefinder_sensor_id = int(getattr(msg, "id", 0))
                 state.rangefinder_last_update_s = time.time()
         elif msg_type == "EXTENDED_SYS_STATE":
@@ -678,6 +732,9 @@ def recent_status_blocks_slam(
         "not ready",
         "lane switch",
         "vibration",
+        "visodom",
+        "visual odom",
+        "out of memory",
     )
     return any(token in text for token in block_tokens)
 

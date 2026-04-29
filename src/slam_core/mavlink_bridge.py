@@ -108,7 +108,7 @@ def send_odometry(
 
         mav.odometry_send(
             pose.timestamp_us,
-            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            getattr(mavutil.mavlink, "MAV_FRAME_LOCAL_FRD", 20),
             mavutil.mavlink.MAV_FRAME_BODY_FRD,
             pose.x_m,
             pose.y_m,

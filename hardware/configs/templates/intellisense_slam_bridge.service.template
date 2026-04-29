@@ -1,5 +1,5 @@
 [Unit]
-Description=Intellisense SLAM MAVLink Bridge
+Description=Intellisense SLAM bridge and Brake calibration monitor
 After=network.target intellisense_usb_serial_sensors.service
 Wants=intellisense_usb_serial_sensors.service
 ConditionPathExists=__WORKDIR__/config/autostart.yaml
@@ -11,9 +11,10 @@ Group=__GROUP__
 SupplementaryGroups=dialout video render plugdev i2c
 WorkingDirectory=__WORKDIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/env python3 __WORKDIR__/scripts/runners/run_slam_odometry_bridge.py --config __WORKDIR__/config/autostart.yaml
+ExecStart=/usr/bin/env python3 __WORKDIR__/scripts/calibration/brake_slam_calibration.py --config __WORKDIR__/config/autostart.yaml
 Restart=always
 RestartSec=3
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target

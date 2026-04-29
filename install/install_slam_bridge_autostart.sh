@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 SENSOR_INSTALLER="${SCRIPT_DIR}/install/install_usb_serial_sensors_autostart.sh"
 SERVICE_TEMPLATE="${SCRIPT_DIR}/hardware/configs/templates/intellisense_slam_bridge.service.template"
 SERVICE_NAME="intellisense_slam_bridge.service"
+LEGACY_SERVICE_NAME="vio-flight.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 TMP_SERVICE="$(mktemp)"
 RUN_USER="${SUDO_USER:-$(id -un)}"
@@ -61,6 +62,12 @@ install -m 0644 "${TMP_SERVICE}" "${SERVICE_PATH}"
 rm -f "${TMP_SERVICE}"
 
 systemctl daemon-reload
+
+# The old field service name was vio-flight.service. It ran the same camera and
+# MAVLink stack, so leaving both active can make RealSense appear "busy" and can
+# split GCS telemetry. Disable the legacy unit when installing the clearer SLAM
+# bridge service name.
+systemctl disable --now "${LEGACY_SERVICE_NAME}" >/dev/null 2>&1 || true
 
 if [[ "${ENABLE_NOW}" -eq 1 ]]; then
   systemctl enable "${SERVICE_NAME}"

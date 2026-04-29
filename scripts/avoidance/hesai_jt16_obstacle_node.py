@@ -218,11 +218,19 @@ class AvoidanceNode:
         # Audio Beeps
         if 0 < closest < 1.2:
             if now - self.last_beep_time > 0.5: # Rapid
-                self.send_tune(self.TUNE_RAPID_BEEPS)
+                self.send_tune(
+                    self.TUNE_RAPID_BEEPS,
+                    f"LiDAR critical beep: obstacle {closest:.1f}m",
+                    mavutil.mavlink.MAV_SEVERITY_CRITICAL,
+                )
                 self.last_beep_time = now
         elif 0 < closest < danger:
             if now - self.last_beep_time > 1.5: # Single
-                self.send_tune(self.TUNE_SINGLE_BEEP)
+                self.send_tune(
+                    self.TUNE_SINGLE_BEEP,
+                    f"LiDAR warning beep: obstacle {closest:.1f}m",
+                    mavutil.mavlink.MAV_SEVERITY_WARNING,
+                )
                 self.last_beep_time = now
 
         # GCS Warnings (even if disarmed)
@@ -239,9 +247,11 @@ class AvoidanceNode:
                 self.send_statustext(f"LiDAR Warning: {name} {closest:.1f}m", mavutil.mavlink.MAV_SEVERITY_WARNING)
                 self.last_warn_time = now
 
-    def send_tune(self, tune_str):
+    def send_tune(self, tune_str, notice_text=None, severity=mavutil.mavlink.MAV_SEVERITY_INFO):
         if not self.master: return
         try:
+            if notice_text:
+                self.send_statustext(notice_text, severity)
             self.master.mav.play_tune_send(1, 1, tune_str.encode('utf-8'))
         except: pass
 

@@ -14,7 +14,7 @@ fc_setup:
   select_source_set_on_stream: true
   activate_mode: POSHOLD
   ready_min_quality: 60
-  require_rangefinder_height: true
+  require_rangefinder_height: false
   ahrs_ekf_type: 3
   avoid_enable: 7
   avoid_margin_m: 2.0
@@ -33,6 +33,10 @@ fc_setup:
   velz_source: 0
   yaw_source: 1
   prx1_type: 2
+  # Disable unused MAVLink GPS2 by default. Only enable this with gps_input when
+  # intentionally simulating/providing a second GPS.
+  gps2_type: 0
+  gps_auto_switch: 0
 obstacle:
   enabled: true
   lidar_enabled: true
@@ -54,6 +58,10 @@ qgc:
 gps_input:
   enabled: false
   gps_id: 1
+  fixed_fix: false
+  fixed_lat_deg: 37.7749
+  fixed_lon_deg: -122.4194
+  fixed_alt_m: 10.0
   origin_lat_deg: 0.0
   origin_lon_deg: 0.0
   origin_alt_m: 0.0
@@ -82,7 +90,7 @@ calibration:
   min_pose_quality: 55
   profile_path: runtime/slam_calibration.json
   auto_rtl_after_complete: true
-  fallback_mode: BRAKE
+  fallback_mode: LOITER
   target_height_m: 5.0
   target_height_tolerance_m: 0.35
   ground_max_height_m: 0.7
@@ -95,6 +103,9 @@ calibration:
   require_rc_link: true
   movement_commands_enabled: false
   movement_speed_m_s: 0.12
+  vertical_speed_m_s: 0.08
+  altitude_hold_gain: 0.25
+  altitude_hold_deadband_m: 0.12
   yaw_rate_deg_s: 6.0
   dry_run: false
   kill_switch_confirmed: false

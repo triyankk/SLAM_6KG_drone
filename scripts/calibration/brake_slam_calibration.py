@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,24 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATUS_PATH = REPO_ROOT / "logs" / "slam_calibration_status.json"
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "slam_calibration.log"
+ACTIVE_BRIDGE_PROCESS: subprocess.Popen | None = None
+
+
+def stop_active_bridge(signum=None, _frame=None) -> None:
+    global ACTIVE_BRIDGE_PROCESS
+    process = ACTIVE_BRIDGE_PROCESS
+    if process is not None and process.poll() is None:
+        print("Stopping child SLAM bridge process...")
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=5.0)
+        except Exception:  # noqa: BLE001
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                pass
+    if signum is not None:
+        raise SystemExit(128 + int(signum))
 
 
 def parse_args():
@@ -52,7 +72,7 @@ def print_status(config: dict) -> int:
     status_path = status_path_from_config(config)
     if not status_path.exists():
         print(f"No status file yet: {status_path}")
-        print("Start vio-flight.service or run scripts/brake_slam_calibration.py first.")
+        print("Start intellisense_slam_bridge.service or run scripts/brake_slam_calibration.py first.")
         return 1
     payload = json.loads(status_path.read_text(encoding="utf-8"))
     print("Latest SLAM calibration status")
@@ -74,6 +94,59 @@ def print_status(config: dict) -> int:
     print(f"failure_reason={payload.get('failure_reason')}")
     print(f"dry_run={payload.get('dry_run')} movement_enabled={payload.get('movement_enabled')}")
     return 0
+
+
+def running_bridge_processes() -> list[str]:
+    try:
+        output = subprocess.check_output(
+            ["ps", "-eo", "pid=,args="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+    current_pid = os.getpid()
+    matches = []
+    markers = (
+        "scripts/runners/run_slam_odometry_bridge.py",
+        "scripts/calibration/brake_slam_calibration.py",
+    )
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pid_text, _, command = stripped.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        if any(marker in command for marker in markers):
+            matches.append(stripped)
+    return matches
+
+
+def refuse_parallel_bridge(config: dict) -> int:
+    active = running_bridge_processes()
+    if not active:
+        return 0
+
+    print("Another SLAM bridge/calibration monitor is already running.")
+    print("Do not run two bridge processes at once: they fight over RealSense and MAVLink.")
+    for process in active:
+        print(f"- {process}")
+    print("")
+    print("Use this to inspect the running service instead:")
+    print("  python3 scripts/calibration/brake_slam_calibration.py --status")
+    print("  journalctl -u intellisense_slam_bridge.service -f")
+    print("")
+    print("If you intentionally want a manual dry-run, stop the service first:")
+    print("  sudo systemctl stop intellisense_slam_bridge.service")
+    print("")
+    print_status(config)
+    return 2
 
 
 def apply_runtime_overrides(config: dict, args) -> None:
@@ -104,6 +177,9 @@ def print_summary(config: dict) -> None:
     print(f"target_height_m={calibration.get('target_height_m')}")
     print(f"dry_run={calibration.get('dry_run')}")
     print(f"movement_commands_enabled={calibration.get('movement_commands_enabled')}")
+    print(f"movement_speed_m_s={calibration.get('movement_speed_m_s')}")
+    print(f"vertical_speed_m_s={calibration.get('vertical_speed_m_s')}")
+    print(f"altitude_hold_gain={calibration.get('altitude_hold_gain')}")
     print(f"kill_switch_confirmed={calibration.get('kill_switch_confirmed')}")
     print(f"fallback_mode={calibration.get('fallback_mode')}")
     print(f"auto_rtl_after_complete={calibration.get('auto_rtl_after_complete')}")
@@ -120,6 +196,7 @@ def write_temp_config(config: dict) -> Path:
 
 
 def run_bridge_with_local_log(config: dict, temp_path: Path) -> int:
+    global ACTIVE_BRIDGE_PROCESS
     log_path = log_path_from_config(config)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -129,7 +206,7 @@ def run_bridge_with_local_log(config: dict, temp_path: Path) -> int:
         str(temp_path),
     ]
     with log_path.open("a", encoding="utf-8") as log_handle:
-        log_handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | state=IDLE mode=unknown armed=unknown landed=unknown on_ground=unknown rng=unknown vio=unknown imu=unknown ekf_extnav=unknown mavlink=unknown action=starting vio-flight monitor reason=\n")
+        log_handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | state=IDLE mode=unknown armed=unknown landed=unknown on_ground=unknown rng=unknown vio=unknown imu=unknown ekf_extnav=unknown mavlink=unknown action=starting SLAM bridge monitor reason=\n")
         log_handle.flush()
         process = subprocess.Popen(
             command,
@@ -137,23 +214,34 @@ def run_bridge_with_local_log(config: dict, temp_path: Path) -> int:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
+        ACTIVE_BRIDGE_PROCESS = process
         assert process.stdout is not None
-        for line in process.stdout:
-            print(line, end="")
-            log_handle.write(line)
-            log_handle.flush()
-        return process.wait()
+        try:
+            for line in process.stdout:
+                print(line, end="")
+                log_handle.write(line)
+                log_handle.flush()
+            return process.wait()
+        finally:
+            stop_active_bridge()
+            ACTIVE_BRIDGE_PROCESS = None
 
 
 def main() -> int:
     args = parse_args()
+    signal.signal(signal.SIGTERM, stop_active_bridge)
+    signal.signal(signal.SIGINT, stop_active_bridge)
     config_path = resolve_path(args.config)
     config = load_config(config_path)
     if args.status:
         return print_status(config)
 
     apply_runtime_overrides(config, args)
+    parallel_result = refuse_parallel_bridge(config)
+    if parallel_result:
+        return parallel_result
     print_summary(config)
     temp_path = write_temp_config(config)
     return run_bridge_with_local_log(config, temp_path)

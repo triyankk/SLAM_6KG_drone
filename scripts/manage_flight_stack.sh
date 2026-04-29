@@ -5,7 +5,6 @@ SERVICES=(
   "intellisense_usb_serial_sensors.service"
   "hesai-jt16-obstacle.service"
   "intellisense_slam_bridge.service"
-  "vio-flight.service"
 )
 
 function usage() {
