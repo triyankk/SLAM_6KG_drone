@@ -1,5 +1,6 @@
 import math
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -52,6 +53,31 @@ def expand_cube_ports(ports: Iterable[str]) -> list[str]:
     return expanded
 
 
+def is_autopilot_heartbeat(msg) -> bool:
+    autopilot = int(getattr(msg, "autopilot", mavutil.mavlink.MAV_AUTOPILOT_INVALID))
+    mav_type = int(getattr(msg, "type", 0))
+    if autopilot == mavutil.mavlink.MAV_AUTOPILOT_INVALID:
+        return False
+    if mav_type in {
+        mavutil.mavlink.MAV_TYPE_GCS,
+        mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
+    }:
+        return False
+    return True
+
+
+def wait_autopilot_heartbeat(master, timeout_s: float):
+    deadline_s = time.time() + max(timeout_s, 0.1)
+    while time.time() < deadline_s:
+        msg = master.recv_match(type="HEARTBEAT", blocking=True, timeout=0.5)
+        if msg is None or not is_autopilot_heartbeat(msg):
+            continue
+        master.target_system = int(msg.get_srcSystem())
+        master.target_component = int(msg.get_srcComponent())
+        return msg
+    raise TimeoutError("No autopilot heartbeat received")
+
+
 def quaternion_to_euler(sample: PoseSample) -> tuple[float, float, float]:
     qw, qx, qy, qz = sample.qw, sample.qx, sample.qy, sample.qz
 
@@ -78,7 +104,7 @@ def connect_to_cube(ports: Iterable[str], baud: int, heartbeat_timeout_s: float 
         master = None
         try:
             master = mavutil.mavlink_connection(port, baud=baud)
-            master.wait_heartbeat(timeout=heartbeat_timeout_s)
+            wait_autopilot_heartbeat(master, heartbeat_timeout_s)
             return CubeConnection(master=master, port=port, baud=baud)
         except Exception as exc:  # noqa: BLE001
             last_error = exc

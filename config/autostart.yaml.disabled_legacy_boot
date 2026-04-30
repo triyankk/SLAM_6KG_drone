@@ -28,12 +28,12 @@ fc_setup:
   viso_pos_y_m: 0.0
   viso_pos_z_m: 0.0
   viso_qual_min: 0
-  # Safe default: monitor SLAM/VIO without creating a fake GPS2 source.
-  # Enable GPS2 bridge only for a deliberate, calibrated test profile.
+  # Flight-test GPS2 bridge mode: keep ArduPilot VisOdom disabled and mirror
+  # gated SLAM/VIO pose into MAVLink GPS_INPUT on GPS2.
   viso_type: 0
   yaw_source: 1
-  gps2_type: 0
-  gps_auto_switch: 0
+  gps2_type: 14
+  gps_auto_switch: 1
 heartbeat_timeout_seconds: 8.0
 imu: true
 imu_baud: auto
@@ -69,12 +69,14 @@ qgc:
   bind_host: 0.0.0.0
   bind_port: 14555
 gps_input:
-  enabled: false
+  enabled: true
   gps_id: 1
   fixed_fix: false
   fixed_lat_deg: 37.7749
   fixed_lon_deg: -122.4194
   fixed_alt_m: 10.0
+  # Zero origin means the bridge will lock the GPS2 origin from healthy real
+  # GPS/EKF telemetry at runtime, compensating the current VIO offset.
   origin_lat_deg: 0.0
   origin_lon_deg: 0.0
   origin_alt_m: 0.0
@@ -82,6 +84,7 @@ gps_input:
   horiz_accuracy_m: 0.5
   vert_accuracy_m: 1.0
   speed_accuracy_m_s: 0.3
+  update_rate_hz: 8.0
 lidar_steering:
   enabled: false
   trigger_distance_m: 2.0
@@ -125,3 +128,36 @@ calibration:
   min_battery_remaining_pct: 20
   status_path: logs/slam_calibration_status.json
   log_path: logs/slam_calibration.log
+soft_calibration:
+  # Loiter remains fully GPS/EKF controlled. This learner only compares SLAM/VIO
+  # against the trusted Loiter reference and never changes flight-controller
+  # source sets or commands motion.
+  enabled: true
+  mode: LOITER
+  duration_s: 20.0
+  min_samples: 120
+  min_gps_fix_type: 3
+  min_gps_satellites: 8
+  min_pose_quality: 45
+  announce_interval_s: 10.0
+  ready_score_threshold: 7.0
+  low_score_threshold: 5.0
+  critical_score_threshold: 3.0
+  save_improvement_threshold: 0.3
+  profile_path: runtime/loiter_soft_calibration.json
+  sample_log_path: logs/loiter_soft_learning.jsonl
+  sample_log_hz: 1.0
+  fallback_enabled: false
+  fallback_mode: LOITER
+slam_observer:
+  enable_loiter_observation: true
+  observation_message_interval_sec: 20
+  min_quality_for_poshold: 7.0
+  weak_quality_threshold: 5.0
+  critical_quality_threshold: 3.0
+  quality_update_delta: 0.5
+  enable_live_soft_correction: true
+  enable_auto_fallback_to_loiter: true
+  log_observation_data: true
+  log_path: logs/slam_loiter_observer.log
+  status_path: logs/slam_loiter_observer_status.json

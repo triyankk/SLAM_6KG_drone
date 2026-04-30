@@ -12,6 +12,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pymavlink import mavutil
 
+from slam_core.fc_config import current_gps_week_time
+
 
 def gps_input_ignore_flags() -> int:
     return (
@@ -75,14 +77,15 @@ def main():
     try:
         while time.time() - start_time < duration:
             now_us = int(time.time() * 1e6)
+            gps_week, gps_week_ms = current_gps_week_time()
             
             # Send GPS_INPUT (ID 232)
             master.mav.gps_input_send(
                 now_us,
                 args.gps_id,
                 gps_input_ignore_flags(),
-                0, # time_week_ms
-                0, # time_week
+                gps_week_ms, # time_week_ms
+                gps_week, # time_week
                 3, # fix_type (3D fix)
                 int(args.lat * 1e7),
                 int(args.lon * 1e7),

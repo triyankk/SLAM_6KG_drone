@@ -5,7 +5,7 @@ baud: 115200
 source: standby
 rate_hz: 15.0
 csv_path: ""
-boot_delay_seconds: 60.0
+boot_delay_seconds: 30.0
 fc_setup:
   enabled: true
   slam_source_set: 3
@@ -69,6 +69,7 @@ gps_input:
   horiz_accuracy_m: 0.5
   vert_accuracy_m: 1.0
   speed_accuracy_m_s: 0.3
+  update_rate_hz: 8.0
 lidar_steering:
   enabled: false
   trigger_distance_m: 2.0
@@ -112,3 +113,33 @@ calibration:
   min_battery_remaining_pct: 20
   status_path: logs/slam_calibration_status.json
   log_path: logs/slam_calibration.log
+soft_calibration:
+  enabled: true
+  mode: LOITER
+  duration_s: 20.0
+  min_samples: 120
+  min_gps_fix_type: 3
+  min_gps_satellites: 8
+  min_pose_quality: 45
+  announce_interval_s: 10.0
+  ready_score_threshold: 7.0
+  low_score_threshold: 5.0
+  critical_score_threshold: 3.0
+  save_improvement_threshold: 0.3
+  profile_path: runtime/loiter_soft_calibration.json
+  sample_log_path: logs/loiter_soft_learning.jsonl
+  sample_log_hz: 1.0
+  fallback_enabled: false
+  fallback_mode: LOITER
+slam_observer:
+  enable_loiter_observation: true
+  observation_message_interval_sec: 20
+  min_quality_for_poshold: 7.0
+  weak_quality_threshold: 5.0
+  critical_quality_threshold: 3.0
+  quality_update_delta: 0.5
+  enable_live_soft_correction: false
+  enable_auto_fallback_to_loiter: false
+  log_observation_data: true
+  log_path: logs/slam_loiter_observer.log
+  status_path: logs/slam_loiter_observer_status.json

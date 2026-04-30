@@ -11,10 +11,13 @@ from slam_core.fc_config import (
     BRIDGE_STATE_PARAM,
     FlightControllerSetupConfig,
     build_fc_setup_parameters,
+    current_gps_week_time,
+    gps_input_timestamp_from_reference,
     publish_bridge_state,
     send_distance_sensor,
     send_fixed_gps_input,
     send_gps_input_from_pose,
+    send_gps_input_from_fc_reference,
     send_obstacle_distance,
     send_body_velocity_nudge,
     send_companion_heartbeat,
@@ -65,18 +68,41 @@ class FakeMaster:
 
 
 def test_slam_source_set_parameters_are_scoped():
-    params = build_fc_setup_parameters(FlightControllerSetupConfig(slam_source_set=3))
+    params = build_fc_setup_parameters(FlightControllerSetupConfig(slam_source_set=3, viso_type=3))
 
     assert params["EK3_SRC3_POSXY"] == 6.0
     assert params["EK3_SRC3_VELXY"] == 6.0
     assert params["EK3_SRC3_POSZ"] == 1.0
     assert params["EK3_SRC3_VELZ"] == 0.0
     assert params["EK3_SRC3_YAW"] == 1.0
-    assert "EK3_SRC1_POSXY" not in params
+    assert params["EK3_SRC1_POSXY"] == 3.0
+    assert params["EK3_SRC1_VELXY"] == 3.0
+    assert params["EK3_SRC1_POSZ"] == 1.0
+    assert params["EK3_SRC1_VELZ"] == 0.0
+    assert params["EK3_SRC1_YAW"] == 1.0
     assert "EK3_SRC2_POSXY" not in params
     assert params["AVOID_MARGIN"] == 2.0
     assert params["PRX1_TYPE"] == 2.0
     assert "GPS2_TYPE" not in params
+
+
+def test_visual_odom_sources_are_scrubbed_when_viso_disabled():
+    params = build_fc_setup_parameters(
+        FlightControllerSetupConfig(
+            slam_source_set=3,
+            idle_source_set=1,
+            select_source_set_on_stream=False,
+            viso_type=0,
+        )
+    )
+
+    assert params["VISO_TYPE"] == 0.0
+    assert params["EK3_SRC1_POSXY"] == 3.0
+    assert params["EK3_SRC1_VELXY"] == 3.0
+    assert params["EK3_SRC3_POSXY"] == 3.0
+    assert params["EK3_SRC3_VELXY"] == 3.0
+    assert params["EK3_SRC3_POSZ"] == 1.0
+    assert params["EK3_SRC3_YAW"] == 1.0
 
 
 def test_gps2_mavlink_params_are_optional():
@@ -91,7 +117,7 @@ def test_gps2_mavlink_params_are_optional():
 
     assert params["GPS2_TYPE"] == 14.0
     assert params["GPS_AUTO_SWITCH"] == 1.0
-    assert "EK3_SRC3_POSXY" not in params
+    assert params["EK3_SRC3_POSXY"] == 3.0
 
 
 def test_publish_bridge_state_updates_lua_relay_params():
@@ -178,10 +204,57 @@ def test_send_gps_input_targets_gps2_from_local_pose():
     assert ok
     msg = master.mav.gps_inputs[0]
     assert msg[1] == 1
+    assert msg[3] > 0
+    assert msg[4] > 0
     assert msg[5] == 3
     assert msg[7] == 200000000
     assert msg[8] == 102.0
     assert msg[11] == 0.2
+
+
+def test_send_gps_input_can_mirror_real_gps_to_gps2():
+    master = FakeMaster()
+    gps_time_usec = 1_775_000_000_000_000
+    gps_week, gps_week_ms = current_gps_week_time(gps_time_usec / 1e6)
+    state = type(
+        "State",
+        (),
+        {
+            "gps_fix_type": 3,
+            "gps_satellites": 12,
+            "gps_lat": 123456789,
+            "gps_lon": 987654321,
+            "gps_alt_mm": 456000,
+            "global_vx_cm_s": 20,
+            "global_vy_cm_s": -10,
+            "global_vz_cm_s": 5,
+            "gps_time_usec": gps_time_usec,
+        },
+    )()
+
+    ok = send_gps_input_from_fc_reference(master, state, GpsInputConfig(enabled=True, gps_id=1))
+
+    assert ok
+    msg = master.mav.gps_inputs[0]
+    assert msg[0] == gps_time_usec
+    assert msg[1] == 1
+    assert msg[3] == gps_week_ms
+    assert msg[4] == gps_week
+    assert msg[5] == 3
+    assert msg[6] == 123456789
+    assert msg[7] == 987654321
+    assert msg[8] == 456.0
+    assert msg[11] == 0.2
+
+
+def test_gps_input_timestamp_falls_back_when_fc_gps_time_is_boot_time():
+    state = type("State", (), {"gps_time_usec": 2_000_000})()
+
+    time_usec, gps_week, gps_week_ms = gps_input_timestamp_from_reference(state)
+
+    assert time_usec > 1_000_000_000_000_000
+    assert gps_week > 2400
+    assert 0 <= gps_week_ms < 604800000
 
 
 def test_send_fixed_gps_input_targets_gps2():
@@ -201,10 +274,19 @@ def test_send_fixed_gps_input_targets_gps2():
 
     msg = master.mav.gps_inputs[0]
     assert msg[1] == 1
+    assert msg[3] > 0
+    assert msg[4] > 0
     assert msg[5] == 3
     assert msg[6] == 377749000
     assert msg[7] == -1224194000
     assert msg[8] == 10.0
+
+
+def test_current_gps_week_time_is_nonzero_for_modern_dates():
+    week, week_ms = current_gps_week_time(1_775_000_000.0)
+
+    assert week > 2400
+    assert 0 <= week_ms < 604800000
 
 
 def test_send_body_velocity_nudge_uses_body_frame_velocity_only():
@@ -238,7 +320,7 @@ def test_send_odometry_has_mavlink2_message_available():
     assert master.mav.odometry
 
 
-def test_autostart_config_is_monitoring_safe_by_default():
+def test_autostart_config_uses_gated_gps2_bridge_mode():
     config_path = Path(__file__).resolve().parents[1] / "config" / "autostart.yaml"
     text = config_path.read_text(encoding="utf-8")
     payload = yaml.safe_load(text)
@@ -246,10 +328,10 @@ def test_autostart_config_is_monitoring_safe_by_default():
 
     assert text.count("viso_type:") == 1
     assert payload["fc_setup"]["viso_type"] == 0
-    assert payload["fc_setup"]["gps2_type"] == 0
+    assert payload["fc_setup"]["gps2_type"] == 14
     assert payload["fc_setup"]["select_source_set_on_stream"] is False
-    assert payload["gps_input"]["enabled"] is False
+    assert payload["gps_input"]["enabled"] is True
     assert config.fc_setup.viso_type == 0
-    assert config.fc_setup.gps2_type == 0
-    assert config.gps_input.enabled is False
+    assert config.fc_setup.gps2_type == 14
+    assert config.gps_input.enabled is True
     assert config.obstacle.safety_distance_m == 2.0

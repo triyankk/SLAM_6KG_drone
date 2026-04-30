@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""Systemd-friendly wrapper for the flight-facing SLAM bridge.
+
+The service starts here instead of launching `run_slam_odometry_bridge.py`
+directly because this wrapper owns practical field chores: preventing duplicate
+bridge processes, resolving config paths, printing concise status, and stopping
+the child bridge cleanly when systemd restarts the service.
+"""
 
 import argparse
 import json
@@ -19,6 +26,13 @@ ACTIVE_BRIDGE_PROCESS: subprocess.Popen | None = None
 
 
 def stop_active_bridge(signum=None, _frame=None) -> None:
+    """Terminate the child bridge as a process group.
+
+    The child may have camera, serial, and UDP resources open. A process-group
+    kill prevents orphaned sensor readers from keeping devices busy after a
+    service restart.
+    """
+
     global ACTIVE_BRIDGE_PROCESS
     process = ACTIVE_BRIDGE_PROCESS
     if process is not None and process.poll() is None:
@@ -129,6 +143,8 @@ def running_bridge_processes() -> list[str]:
 
 
 def refuse_parallel_bridge(config: dict) -> int:
+    """Avoid two bridge instances fighting over RealSense and the Cube port."""
+
     active = running_bridge_processes()
     if not active:
         return 0
@@ -150,10 +166,16 @@ def refuse_parallel_bridge(config: dict) -> int:
 
 
 def apply_runtime_overrides(config: dict, args) -> None:
+    """Apply CLI overrides after YAML load, before handing config to the child."""
+
     calibration = config.setdefault("calibration", {})
     for key in ("profile_path", "status_path", "log_path"):
         if calibration.get(key):
             calibration[key] = str(resolve_path(str(calibration[key])))
+    slam_observer = config.setdefault("slam_observer", {})
+    for key in ("log_path", "status_path"):
+        if slam_observer.get(key):
+            slam_observer[key] = str(resolve_path(str(slam_observer[key])))
     if args.dry_run:
         calibration["dry_run"] = True
         calibration["movement_commands_enabled"] = False

@@ -2,8 +2,10 @@
 -- Install on the flight controller SD card as:
 --   APM/scripts/brake_slam_beeper.lua
 --
--- Jetson remains the calibration brain. This script only relays SCR_USER1
--- state changes into GCS text and buzzer tunes if notify:play_tune is present.
+-- Jetson remains the calibration brain and owns the primary PLAY_TUNE beeps.
+-- This Lua helper is a quiet backup relay: it explains SCR_USER1 state changes
+-- in GCS and only plays local tunes for FC-side events/errors, avoiding duplicate
+-- startup/ready/calibration tunes from both Jetson and Cube.
 
 local STATUS_PARAM = "SCR_USER1"
 local SOURCE_SET_PARAM = "SCR_USER2"
@@ -18,6 +20,7 @@ local STATE_SLAM_STARTED = 40
 local STATE_SOURCE_SET_ACTIVE = 50
 local STATE_POSHOLD_READY = 54
 local STATE_CALIBRATION_WAITING_ARM = 68
+local STATE_CALIBRATION_WAITING_TAKEOFF = 69
 local STATE_CALIBRATION_ACTIVE = 70
 local STATE_CALIBRATION_COMPLETE_RTL = 71
 local STATE_SLAM_FLIGHT_ACTIVE = 72
@@ -61,36 +64,32 @@ end
 
 local function on_state(state, source_set)
     if state == STATE_IDLE then
-        notice("SLAM bridge idle")
+        notice("SLAM bridge idle: monitoring only, no SLAM control active.")
     elseif state == STATE_JETSON_BOOT then
-        notice("Jetson SLAM bridge initiated")
-        play("MFT200L8AAA") -- Three short medium-pitch beeps: Booting
+        notice("SLAM bridge boot state: waiting for Jetson 30s startup beep.")
     elseif state == STATE_SENSOR_CHECK_PASSED then
-        notice("SLAM sensor quick check passed")
-        play("MFT240L8A") -- Single medium beep: Sensors OK
+        notice("SLAM sensor quick check passed: not full flight readiness.")
     elseif state == STATE_SLAM_STARTED then
-        notice("SLAM odometry stream started")
+        notice("SLAM pose stream healthy: monitoring until gate requests GPS2/PosHold.")
     elseif state == STATE_SOURCE_SET_ACTIVE then
-        notice(string.format("SLAM ExternalNav source active: %d", source_set))
+        notice(string.format("EKF source set active: %d", source_set))
     elseif state == STATE_POSHOLD_READY then
-        notice("SLAM ready for PosHold")
-        play("MFT200L16CDEF") -- Fast ascending scale: System ready for flight
+        notice("NO-GPS POSHOLD gate ready: check Jetson GCS details.")
     elseif state == STATE_CALIBRATION_WAITING_ARM then
         notice("Brake mode detected. Waiting for arm to start SLAM calibration.")
+    elseif state == STATE_CALIBRATION_WAITING_TAKEOFF then
+        notice("Brake calibration waiting for takeoff or 5m rangefinder height.")
     elseif state == STATE_CALIBRATION_ACTIVE then
-        notice("SLAM calibration active")
-        play("MFT180L16GABG") -- Distinctive four-note melody: Calibration in progress
+        notice("BRAKE calibration active: hold height, pilot override ready.")
     elseif state == STATE_CALIBRATION_COMPLETE_RTL then
-        notice("Calibration successful: SLAM PosHold calibration complete. Initiating RTL.")
-        play("MFT160L4CDEF") -- Long, bright ascending scale: Calibration success
+        notice("Calibration successful: profile saved; RTL may be requested.")
     elseif state == STATE_SLAM_FLIGHT_ACTIVE then
-        notice("SLAM flight active")
-        play("MFT240L8A") -- Single beep: Navigation active
+        notice("SLAM flight active: GCS will repeat No-GPS POSHOLD status.")
     elseif state == STATE_SOURCE_SWITCH_FAILED then
-        warn("EKF source switch failed")
+        warn("BEEP: EKF source switch failed")
         play("MFT160L8CBA") -- Descending scale: Error/Failure
     elseif state == STATE_SOURCE_SWITCH_NO_ACK then
-        warn("EKF source switch no ack")
+        warn("BEEP: EKF source switch no ack")
         play("MFT160L8CBA") -- Descending scale: Error/Failure
     end
 end
@@ -131,14 +130,14 @@ local function update()
 
     if mode ~= last_mode then
         last_mode = mode
-        notice(string.format("Flight mode changed: mode=%d", mode))
+        notice(string.format("BEEP: FC mode changed; mode=%d", mode))
         play("MFT220L16A") -- Single short "click" beep: Mode changed
     end
 
     if armed ~= last_armed then
         last_armed = armed
         if armed then
-            notice("Vehicle ARMED")
+            notice("BEEP: Vehicle ARMED")
             play("MFT220L16AAA") -- Three rapid beeps: Vehicle Armed
         else
             notice("Vehicle DISARMED")
@@ -153,8 +152,7 @@ local function update()
 
     if state == STATE_CALIBRATION_ACTIVE then
         if now_ms - last_active_beep_ms > 10000 then
-            notice("SLAM calibration active")
-            play("MFT240L8A") -- Single reminder beep every 10 seconds during calibration
+            notice("BRAKE calibration still active.")
             last_active_beep_ms = now_ms
         end
     end

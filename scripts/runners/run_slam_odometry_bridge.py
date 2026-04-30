@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
+"""Long-running Jetson-to-Cube SLAM bridge.
+
+This is the flight-facing process. It owns the Cube MAVLink serial connection,
+samples VIO/IMU/rangefinder/LiDAR data, sends GCS status, performs Brake-mode
+calibration, and conditionally feeds SLAM pose to ArduPilot. Only one copy of
+this process should run during field tests.
+"""
 
 import argparse
 import json
 import math
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -33,6 +41,7 @@ from slam_core.fc_config import (
     BRIDGE_STATE_SOURCE_SET_ACTIVE,
     BRIDGE_STATE_POSHOLD_READY,
     BRIDGE_STATE_CALIBRATION_WAITING_ARM,
+    BRIDGE_STATE_CALIBRATION_WAITING_TAKEOFF,
     BRIDGE_STATE_CALIBRATION_ACTIVE,
     BRIDGE_STATE_CALIBRATION_COMPLETE_RTL,
     BRIDGE_STATE_SLAM_FLIGHT_ACTIVE,
@@ -55,6 +64,7 @@ from slam_core.fc_config import (
     send_distance_sensor,
     send_fixed_gps_input,
     send_gcs_event,
+    send_gps_input_from_fc_reference,
     send_gps_input_from_pose,
     send_ground_calibration_warning_beeps,
     send_obstacle_distance,
@@ -65,7 +75,6 @@ from slam_core.fc_config import (
     send_sensor_check_beep,
     send_slam_flight_ping,
     send_startup_beeps,
-    send_statustext,
     set_vehicle_mode,
     set_ekf_source_set,
 )
@@ -73,6 +82,112 @@ from slam_core.lidar import LidarReader
 from slam_core.mavlink_bridge import connect_to_cube, send_odometry
 from slam_core.pose_sources import make_pose_source
 from slam_core.qgc_bridge import QgcUdpBridge
+from slam_core.slam_observer import SlamLoiterObserver
+
+STARTUP_BEEP_DELAY_SECONDS = 30.0
+NO_GPS_POSHOLD_GCS_INTERVAL_SECONDS = 10.0
+FIELD_GATE_GCS_INTERVAL_SECONDS = 20.0
+FIELD_GATE_CHANGE_MIN_INTERVAL_SECONDS = 8.0
+JETSON_EVENT_GCS_INTERVAL_SECONDS = 30.0
+JETSON_RECONNECT_GCS_INTERVAL_SECONDS = 30.0
+
+
+class ImuSamplerThread:
+    """Continuously read the external IMU without slowing MAVLink updates."""
+
+    def __init__(self, imu_reader, period_s: float):
+        self.imu_reader = imu_reader
+        self.period_s = max(period_s, 0.005)
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="slam-imu-sampler", daemon=True)
+        self._latest_sample = None
+        self._error: Exception | None = None
+
+    def start(self) -> None:
+        if self.imu_reader is not None:
+            self._thread.start()
+
+    def stop(self) -> None:
+        if self.imu_reader is None:
+            return
+        self._stop_event.set()
+        self._thread.join(timeout=2.0)
+
+    def latest(self):
+        with self._lock:
+            return self._latest_sample, self._error
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                sample = self.imu_reader.poll(duration_s=max(0.04, self.period_s))
+                with self._lock:
+                    if sample is not None:
+                        self._latest_sample = sample
+                    self._error = None
+            except Exception as exc:  # noqa: BLE001
+                with self._lock:
+                    self._error = exc
+                time.sleep(0.2)
+
+
+class PoseSamplerThread:
+    """Keep camera/VIO sampling off the MAVLink timing path.
+
+    The GPS2 MAVLink feed must land consistently faster than ArduPilot's GPS
+    health window. RealSense frame waits and PnP work can take longer than that,
+    so this worker continuously refreshes the latest pose while the main loop
+    keeps MAVLink, GPS2, GCS, and mode logic ticking at the configured rate.
+    """
+
+    def __init__(self, source, period_s: float):
+        self.source = source
+        self.period_s = max(period_s, 0.005)
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="slam-pose-sampler", daemon=True)
+        self._latest_pose = None
+        self._sample_count = 0
+        self._error: Exception | None = None
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=2.0)
+
+    def latest(self):
+        with self._lock:
+            return self._latest_pose, self._error, self._sample_count
+
+    def wait_initial(self, timeout_s: float = 3.0):
+        deadline_s = time.time() + max(timeout_s, 0.1)
+        while time.time() < deadline_s:
+            pose, error, sample_count = self.latest()
+            if pose is not None or error is not None:
+                return pose, error, sample_count
+            time.sleep(min(self.period_s, 0.05))
+        return self.latest()
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            started_s = time.time()
+            try:
+                pose = self.source.sample()
+                with self._lock:
+                    self._latest_pose = pose
+                    self._sample_count += 1
+                    self._error = None
+            except Exception as exc:  # noqa: BLE001
+                with self._lock:
+                    self._error = exc
+                time.sleep(0.2)
+
+            remaining_s = self.period_s - (time.time() - started_s)
+            if remaining_s > 0:
+                self._stop_event.wait(remaining_s)
 
 
 def parse_args():
@@ -254,6 +369,8 @@ def close_cube_connection(connection) -> None:
 
 
 def ensure_fc_setup(connection, config: SlamBridgeConfig) -> None:
+    """Apply the minimum ArduPilot params needed by the selected bridge method."""
+
     if not config.fc_setup.enabled:
         return
 
@@ -291,10 +408,28 @@ def ensure_fc_setup(connection, config: SlamBridgeConfig) -> None:
             connection.master,
             "GPS2 disabled: no Jetson GPS_INPUT stream is configured; GPS2 bad-fix warnings should clear after reboot.",
         )
-    send_gcs_event(
-        connection.master,
-        f"FC prepared for ExternalNav source {config.fc_setup.slam_source_set}, avoidance margin {config.fc_setup.avoid_margin_m:.1f}m",
-    )
+    elif using_gps_input_bridge(config):
+        send_gcs_event(
+            connection.master,
+            "VIO feed method: GPS2 GPS_INPUT. VisOdom/ExternalNav is disabled.",
+        )
+        send_gcs_event(
+            connection.master,
+            "MAVLink ODOMETRY is suppressed in GPS2 mode to avoid VisOdom health errors.",
+        )
+        send_gcs_event(
+            connection.master,
+            "GPS2 stream is gated by Brake calibration or LOITER observer quality.",
+        )
+        send_gcs_event(
+            connection.master,
+            f"GPS2 MAVLink feed target rate {config.gps_input.update_rate_hz:.1f}Hz for ArduPilot GPS health.",
+        )
+    else:
+        send_gcs_event(
+            connection.master,
+            f"FC prepared for ExternalNav source {config.fc_setup.slam_source_set}, avoidance margin {config.fc_setup.avoid_margin_m:.1f}m",
+        )
 
 
 def format_fc_position(state: FlightControllerTelemetry) -> str:
@@ -315,11 +450,61 @@ def mode_wants_slam(fc_state: FlightControllerTelemetry, config: SlamBridgeConfi
 
 
 def using_gps_input_bridge(config: SlamBridgeConfig) -> bool:
+    """Return true when the active feed path is GPS2 GPS_INPUT, not VisOdom."""
+
     return (
         config.gps_input.enabled
         and config.fc_setup.viso_type <= 0
         and config.fc_setup.gps2_type not in (None, 0)
     )
+
+
+def gps_input_origin_valid(config: SlamBridgeConfig) -> bool:
+    return abs(config.gps_input.origin_lat_deg) > 1e-9 or abs(config.gps_input.origin_lon_deg) > 1e-9
+
+
+def lock_gps_input_origin_from_reference(
+    pose,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+) -> bool:
+    """Anchor local VIO meters to the current real GPS/EKF reference.
+
+    The bridge needs this before converting local SLAM pose into fake GPS2
+    latitude/longitude. It only locks from a healthy real GPS reference.
+    """
+
+    if gps_input_origin_valid(config):
+        return False
+    if (fc_state.gps_fix_type or 0) < 3 or (fc_state.gps_satellites or 0) < 8:
+        return False
+
+    lat = fc_state.global_lat if fc_state.global_lat not in (None, 0) else fc_state.gps_lat
+    lon = fc_state.global_lon if fc_state.global_lon not in (None, 0) else fc_state.gps_lon
+    alt_mm = fc_state.global_alt_mm if fc_state.global_alt_mm not in (None, 0) else fc_state.gps_alt_mm
+    if lat in (None, 0) or lon in (None, 0) or alt_mm is None:
+        return False
+
+    reference_lat_deg = float(lat) / 1e7
+    reference_lon_deg = float(lon) / 1e7
+    reference_alt_m = float(alt_mm) / 1000.0
+    earth_radius_m = 6378137.0
+    reference_lat_rad = math.radians(reference_lat_deg)
+
+    config.gps_input.origin_lat_deg = reference_lat_deg - math.degrees(float(pose.x_m) / earth_radius_m)
+    config.gps_input.origin_lon_deg = reference_lon_deg - math.degrees(
+        float(pose.y_m) / (earth_radius_m * max(math.cos(reference_lat_rad), 1e-6))
+    )
+    config.gps_input.origin_alt_m = reference_alt_m + float(pose.z_m)
+    return True
+
+
+def observer_ready_for_gps2_poshold(observer_summary: dict | None, config: SlamBridgeConfig) -> bool:
+    if not observer_summary:
+        return False
+    if str(observer_summary.get("recommendation", "")) != "ready_for_no_gps_poshold":
+        return False
+    return float(observer_summary.get("score", 0.0)) >= config.slam_observer.min_quality_for_poshold
 
 
 def apply_cube_rangefinder_height(
@@ -346,11 +531,15 @@ def slam_poshold_ready(
     fc_state: FlightControllerTelemetry,
     config: SlamBridgeConfig,
     calibration_profile: CalibrationProfile,
+    observer_summary: dict | None = None,
 ) -> bool:
+    if not mode_wants_slam(fc_state, config):
+        return False
+    if using_gps_input_bridge(config):
+        return bridge_ready_for_poshold(pose, fc_state, config, calibration_profile, observer_summary)
     return (
-        mode_wants_slam(fc_state, config)
-        and fc_state.active_source_set == config.fc_setup.slam_source_set
-        and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile)
+        fc_state.active_source_set == config.fc_setup.slam_source_set
+        and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile, observer_summary)
     )
 
 
@@ -373,6 +562,8 @@ def pose_safety_reason(
     config: SlamBridgeConfig,
     min_quality: int | None = None,
 ) -> str | None:
+    """Explain why a pose is unsafe to pass to the flight controller."""
+
     if min_quality is None:
         min_quality = max(35, min(config.fc_setup.ready_min_quality, 45))
     if not pose.tracking_state.startswith("ok"):
@@ -419,15 +610,124 @@ def sensor_quick_check_ok(
     return pose_safe_for_fc(pose, fc_state, config, min_quality=max(40, config.calibration.min_pose_quality - 10))
 
 
+def _fmt_fix_sats(fix_type: int | None, satellites: int | None) -> str:
+    fix_text = "unknown" if fix_type is None else str(fix_type)
+    sat_text = "unknown" if satellites is None else str(satellites)
+    return f"fix={fix_text} sats={sat_text}"
+
+
+def _compact_reasons(reasons: list[str], limit: int = 3) -> str:
+    if len(reasons) <= limit:
+        return "; ".join(reasons)
+    return "; ".join(reasons[:limit]) + f"; +{len(reasons) - limit} more"
+
+
+def gps2_reference_valid(fc_state: FlightControllerTelemetry, min_fix_type: int, min_satellites: int) -> bool:
+    return (
+        (fc_state.gps2_fix_type or 0) >= min_fix_type
+        and (fc_state.gps2_satellites or 0) >= min_satellites
+    )
+
+
+def field_gate_block_reasons(
+    pose,
+    imu_sample,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+) -> list[str]:
+    """Return operator-facing blockers for normal field testing.
+
+    The field gate is deliberately broader than the final No-GPS PosHold gate:
+    it tells the pilot when GPS LOITER and Brake calibration have enough sensor
+    context to start useful outdoor validation. It does not mean GPS-less
+    PosHold is ready yet.
+    """
+
+    reasons: list[str] = []
+    if not mavlink_heartbeat_valid(fc_state):
+        reasons.append("MAVLink heartbeat missing")
+
+    pose_reason = pose_safety_reason(
+        pose,
+        fc_state,
+        config,
+        min_quality=max(40, config.calibration.min_pose_quality - 10),
+    )
+    if pose_reason is not None:
+        reasons.append(f"VIO not ready: {pose_reason}")
+
+    if config.imu_enabled and imu_sample is None:
+        reasons.append("external IMU missing")
+
+    if not gps_reference_valid(
+        fc_state,
+        config.calibration.min_gps_fix_type,
+        config.calibration.min_gps_satellites,
+    ):
+        reasons.append(f"GPS1 not ready {_fmt_fix_sats(fc_state.gps_fix_type, fc_state.gps_satellites)}")
+    elif using_gps_input_bridge(config) and not gps2_reference_valid(
+        fc_state,
+        config.calibration.min_gps_fix_type,
+        config.calibration.min_gps_satellites,
+    ):
+        reasons.append(f"GPS2 standby not confirmed {_fmt_fix_sats(fc_state.gps2_fix_type, fc_state.gps2_satellites)}")
+
+    if fc_state.local_position is None:
+        reasons.append("EKF local position missing")
+    if fc_state.attitude is None:
+        reasons.append("attitude telemetry missing")
+    if fc_state.ekf_flags is None:
+        reasons.append("EKF status missing")
+    if config.calibration.require_rc_link and not rc_link_valid(fc_state):
+        reasons.append("RC link missing")
+    if not battery_healthy_for_calibration(fc_state, config):
+        reasons.append(f"battery low {fc_state.battery_remaining_pct}%")
+    if not rangefinder_height_valid(fc_state):
+        reasons.append("rangefinder missing; Brake 5m gate will wait")
+    if recent_status_blocks_slam(fc_state):
+        reasons.append(f"FC warning: {fc_state.status_text or 'status'}")
+
+    return reasons
+
+
+def jetson_lifecycle_message(
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+    field_gate_reasons: list[str],
+) -> str:
+    mode = str(fc_state.flight_mode or "UNKNOWN").upper()
+    armed_text = "armed" if fc_state.armed else "disarmed"
+    if not fc_state.armed:
+        if mode == config.calibration.mode:
+            return "JETSON EVENT: script running; BRAKE selected but vehicle disarmed; waiting for ARM."
+        if field_gate_reasons:
+            return f"JETSON EVENT: script running; {armed_text} mode={mode}; waiting for FIELD GATE OK."
+        return f"JETSON EVENT: script running; {armed_text} mode={mode}; waiting for arm or pilot mode."
+    if mode == config.calibration.mode:
+        return "JETSON EVENT: script running; armed in BRAKE; calibration gate is monitoring."
+    if mode == "LOITER":
+        return "JETSON EVENT: script running; armed in LOITER; SLAM observing only."
+    if mode == config.fc_setup.activate_mode.strip().upper():
+        return "JETSON EVENT: script running; armed in POSHOLD; SLAM GPS2 gate monitoring."
+    return f"JETSON EVENT: script running; armed mode={mode}; monitoring only."
+
+
 def bridge_ready_for_poshold(
     pose,
     fc_state: FlightControllerTelemetry,
     config: SlamBridgeConfig,
     calibration_profile: CalibrationProfile,
+    observer_summary: dict | None = None,
 ) -> bool:
+    """Gate whether SLAM/GPS2 data may be used for POSHOLD experiments."""
+
     if config.fc_setup.viso_type <= 0 and not using_gps_input_bridge(config):
         return False
-    if using_gps_input_bridge(config) and not calibration_profile.valid:
+    if (
+        using_gps_input_bridge(config)
+        and not calibration_profile.valid
+        and not observer_ready_for_gps2_poshold(observer_summary, config)
+    ):
         return False
     if not pose_safe_for_fc(pose, fc_state, config, min_quality=config.fc_setup.ready_min_quality):
         return False
@@ -441,11 +741,16 @@ def bridge_not_ready_reason(
     fc_state: FlightControllerTelemetry,
     config: SlamBridgeConfig,
     calibration_profile: CalibrationProfile,
+    observer_summary: dict | None = None,
 ) -> str | None:
     if config.fc_setup.viso_type <= 0 and not using_gps_input_bridge(config):
         return "VISO_TYPE is disabled; FC will ignore ExternalNav ODOMETRY"
-    if using_gps_input_bridge(config) and not calibration_profile.valid:
-        return "GPS2 bridge is disabled until Brake calibration completes"
+    if (
+        using_gps_input_bridge(config)
+        and not calibration_profile.valid
+        and not observer_ready_for_gps2_poshold(observer_summary, config)
+    ):
+        return "GPS2 bridge waits for Brake calibration or LOITER observer quality >= threshold"
     pose_reason = pose_safety_reason(pose, fc_state, config, min_quality=config.fc_setup.ready_min_quality)
     if pose_reason is not None:
         return pose_reason
@@ -459,6 +764,7 @@ def mode_event_message(
     fc_state: FlightControllerTelemetry,
     config: SlamBridgeConfig,
     calibration_profile: CalibrationProfile,
+    observer_summary: dict | None = None,
 ) -> tuple[str, int]:
     mode = fc_state.flight_mode.upper()
     if mode == config.calibration.mode:
@@ -467,8 +773,13 @@ def mode_event_message(
             mavutil.mavlink.MAV_SEVERITY_NOTICE,
         )
     if mode == config.fc_setup.activate_mode.strip().upper():
-        reason = bridge_not_ready_reason(pose, fc_state, config, calibration_profile)
+        reason = bridge_not_ready_reason(pose, fc_state, config, calibration_profile, observer_summary)
         if reason is None:
+            if using_gps_input_bridge(config):
+                return (
+                    "Mode POSHOLD: SLAM/VIO gated GPS2 bridge can stream if origin is locked.",
+                    mavutil.mavlink.MAV_SEVERITY_NOTICE,
+                )
             if not calibration_profile.valid:
                 return (
                     "Mode POSHOLD: raw SLAM/VIO stream ready but not calibrated yet; using ExternalNav only for cautious setup.",
@@ -483,7 +794,7 @@ def mode_event_message(
             mavutil.mavlink.MAV_SEVERITY_WARNING,
         )
     if mode == "LOITER":
-        return ("Mode LOITER: GPS/EKF position hold active; SLAM bridge monitoring only.", mavutil.mavlink.MAV_SEVERITY_INFO)
+        return ("Mode LOITER: GPS/EKF position hold active; SLAM observation only.", mavutil.mavlink.MAV_SEVERITY_INFO)
     if mode == "RTL":
         return ("Mode RTL: return-to-launch active; SLAM bridge monitoring and source-release only.", mavutil.mavlink.MAV_SEVERITY_NOTICE)
     if mode == "LAND":
@@ -503,6 +814,164 @@ def calibration_profile_stable(profile: CalibrationProfile) -> bool:
         and profile.x_std_m <= 0.75
         and profile.y_std_m <= 0.75
     )
+
+
+def soft_calibration_score(
+    profile: CalibrationProfile,
+    pose_quality: int,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+) -> float:
+    if not profile.valid or profile.sample_count <= 0:
+        return 0.0
+
+    soft_config = config.soft_calibration
+    xy_std_m = math.hypot(profile.x_std_m, profile.y_std_m)
+    sample_ratio = min(1.0, profile.sample_count / max(soft_config.min_samples, 1))
+    yaw_penalty = min(3.0, max(profile.yaw_std_deg, 0.0) / 10.0 * 3.0)
+    xy_penalty = min(4.0, xy_std_m / 1.0 * 4.0)
+    quality_penalty = min(
+        2.0,
+        max(0.0, soft_config.min_pose_quality - float(pose_quality))
+        / max(soft_config.min_pose_quality, 1)
+        * 2.0,
+    )
+    sat_penalty = min(
+        1.0,
+        max(0.0, soft_config.min_gps_satellites - float(fc_state.gps_satellites or 0))
+        * 0.12,
+    )
+    score = 10.0 - yaw_penalty - xy_penalty - quality_penalty - sat_penalty
+    # While the window is still filling, make the score honest rather than
+    # showing a lucky high number from too few samples.
+    score *= max(0.2, sample_ratio)
+    return max(0.0, min(10.0, score))
+
+
+def soft_calibration_block_reason(
+    raw_pose,
+    fc_state: FlightControllerTelemetry,
+    config: SlamBridgeConfig,
+) -> str | None:
+    soft_config = config.soft_calibration
+    if not soft_config.enabled:
+        return "disabled"
+    if fc_state.flight_mode.upper() != soft_config.mode:
+        return f"waiting for {soft_config.mode}"
+    if not fc_state.armed:
+        return "vehicle is not armed"
+    if vehicle_on_ground_for_calibration(fc_state, config):
+        return "vehicle is on ground"
+    if not mavlink_heartbeat_valid(fc_state):
+        return "MAVLink timeout"
+    if config.calibration.require_rc_link and not rc_link_valid(fc_state):
+        return "RC link missing"
+    if not gps_reference_valid(
+        fc_state,
+        soft_config.min_gps_fix_type,
+        soft_config.min_gps_satellites,
+    ):
+        return (
+            "GPS reference unhealthy"
+            f" fix={fc_state.gps_fix_type}"
+            f" sats={fc_state.gps_satellites}"
+        )
+    if fc_state.local_position is None:
+        return "GPS/EKF local position missing"
+    if fc_state.attitude is None:
+        return "attitude telemetry missing"
+    if not pose_safe_for_fc(raw_pose, fc_state, config, min_quality=soft_config.min_pose_quality):
+        return "SLAM/VIO pose not safe"
+    return None
+
+
+def soft_calibration_status_payload(
+    config: SlamBridgeConfig,
+    state: str,
+    score: float,
+    best_score: float,
+    accumulator: CalibrationAccumulator,
+    profile: CalibrationProfile,
+    reason: str = "",
+) -> dict:
+    return {
+        "enabled": config.soft_calibration.enabled,
+        "mode": config.soft_calibration.mode,
+        "state": state,
+        "score": round(float(score), 2),
+        "best_score": round(float(best_score), 2),
+        "samples": len(accumulator.yaw_offsets_deg),
+        "profile_valid": profile.valid,
+        "profile_samples": profile.sample_count,
+        "profile_path": config.soft_calibration.profile_path,
+        "reason": reason,
+    }
+
+
+def append_soft_calibration_sample(
+    config: SlamBridgeConfig,
+    fc_state: FlightControllerTelemetry,
+    raw_pose,
+    imu_sample,
+    score: float,
+) -> None:
+    path_text = config.soft_calibration.sample_log_path
+    if not path_text:
+        return
+    attitude = fc_state.attitude
+    local_position = fc_state.local_position
+    payload = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        "mode": fc_state.flight_mode,
+        "armed": fc_state.armed,
+        "score": round(float(score), 2),
+        "gps_fix_type": fc_state.gps_fix_type,
+        "gps_satellites": fc_state.gps_satellites,
+        "local_position": None
+        if local_position is None
+        else {
+            "x_m": float(getattr(local_position, "x", 0.0)),
+            "y_m": float(getattr(local_position, "y", 0.0)),
+            "z_m": float(getattr(local_position, "z", 0.0)),
+            "vx_m_s": float(getattr(local_position, "vx", 0.0)),
+            "vy_m_s": float(getattr(local_position, "vy", 0.0)),
+            "vz_m_s": float(getattr(local_position, "vz", 0.0)),
+        },
+        "attitude": None
+        if attitude is None
+        else {
+            "roll_deg": math.degrees(float(getattr(attitude, "roll", 0.0))),
+            "pitch_deg": math.degrees(float(getattr(attitude, "pitch", 0.0))),
+            "yaw_deg": math.degrees(float(getattr(attitude, "yaw", 0.0))),
+        },
+        "rc": {
+            "roll": fc_state.rc_channels.get(1),
+            "pitch": fc_state.rc_channels.get(2),
+            "throttle": fc_state.rc_channels.get(3),
+            "yaw": fc_state.rc_channels.get(4),
+            "rssi": fc_state.rc_rssi,
+        },
+        "rangefinder_m": fc_state.rangefinder_distance_m,
+        "vio": {
+            "x_m": float(raw_pose.x_m),
+            "y_m": float(raw_pose.y_m),
+            "z_m": float(raw_pose.z_m),
+            "vx_m_s": float(raw_pose.vx_m_s),
+            "vy_m_s": float(raw_pose.vy_m_s),
+            "vz_m_s": float(raw_pose.vz_m_s),
+            "yaw_deg": pose_yaw_deg(raw_pose),
+            "quality": raw_pose.pose_quality,
+            "tracking": raw_pose.tracking_state,
+            "features": raw_pose.feature_count,
+            "tracked_features": raw_pose.tracked_feature_count,
+            "inliers": raw_pose.inlier_count,
+        },
+        "imu": "present" if imu_sample is not None else "missing",
+    }
+    path = Path(path_text).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def calibration_block_reason(
@@ -573,8 +1042,9 @@ def active_slam_flight(
     fc_state: FlightControllerTelemetry,
     config: SlamBridgeConfig,
     calibration_profile: CalibrationProfile,
+    observer_summary: dict | None = None,
 ) -> bool:
-    return fc_state.armed and slam_poshold_ready(pose, fc_state, config, calibration_profile)
+    return fc_state.armed and slam_poshold_ready(pose, fc_state, config, calibration_profile, observer_summary)
 
 
 def odometry_stream_requested(
@@ -583,6 +1053,8 @@ def odometry_stream_requested(
     calibration_mode_requested: bool,
 ) -> bool:
     if config.calibration.dry_run:
+        return False
+    if using_gps_input_bridge(config):
         return False
     if mode_wants_slam(fc_state, config):
         return True
@@ -600,6 +1072,7 @@ def gps_input_stream_requested(
     config: SlamBridgeConfig,
     calibration_profile: CalibrationProfile,
     calibration_mode_requested: bool,
+    observer_summary: dict | None = None,
 ) -> bool:
     if config.calibration.dry_run or not using_gps_input_bridge(config):
         return False
@@ -607,7 +1080,7 @@ def gps_input_stream_requested(
         return False
     if not mode_wants_slam(fc_state, config):
         return False
-    if not calibration_profile.valid:
+    if not calibration_profile.valid and not observer_ready_for_gps2_poshold(observer_summary, config):
         return False
     return pose_safe_for_fc(pose, fc_state, config, min_quality=config.fc_setup.ready_min_quality)
 
@@ -699,6 +1172,7 @@ def calibration_health_summary(
     config: SlamBridgeConfig,
     action: str = "",
     reason: str = "",
+    soft_summary: dict | None = None,
 ) -> dict:
     mavlink_ok = mavlink_heartbeat_valid(fc_state)
     range_ok = rangefinder_height_valid(fc_state)
@@ -713,7 +1187,7 @@ def calibration_health_summary(
             else False
         )
         nav_status = "accepted" if ekf_external_nav else "pending_or_rejected"
-    return {
+    summary = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         "state": calibration_state_name(stage),
         "stage": stage,
@@ -743,6 +1217,9 @@ def calibration_health_summary(
         "dry_run": config.calibration.dry_run,
         "movement_enabled": config.calibration.movement_commands_enabled,
     }
+    if soft_summary is not None:
+        summary["slam_observer"] = soft_summary
+    return summary
 
 
 def append_calibration_log(config: SlamBridgeConfig, summary: dict) -> None:
@@ -786,8 +1263,18 @@ def record_calibration_status(
     imu_sample,
     action: str = "",
     reason: str = "",
+    soft_summary: dict | None = None,
 ) -> None:
-    summary = calibration_health_summary(stage, fc_state, pose, imu_sample, config, action, reason)
+    summary = calibration_health_summary(
+        stage,
+        fc_state,
+        pose,
+        imu_sample,
+        config,
+        action,
+        reason,
+        soft_summary,
+    )
     write_calibration_status(config, summary)
     append_calibration_log(config, summary)
 
@@ -800,6 +1287,7 @@ def print_calibration_status(
     config: SlamBridgeConfig,
     sent_count: int = 0,
     reason: str = "",
+    soft_summary: dict | None = None,
 ) -> None:
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     range_text = "unknown"
@@ -807,25 +1295,42 @@ def print_calibration_status(
         range_text = f"{fc_state.rangefinder_distance_m:.2f}m"
     imu_text = "stable" if imu_sample is not None else "missing"
     mav_text = "ok" if mavlink_heartbeat_valid(fc_state) else "timeout"
+    soft_text = ""
+    if soft_summary is not None:
+        soft_text = (
+            f" observer={soft_summary.get('score', 0):.1f}/10"
+            f" best={soft_summary.get('best_score', 0):.1f}/10"
+        )
     print(
         f"{timestamp} | mode={fc_state.flight_mode}"
         f" armed={'yes' if fc_state.armed else 'no'}"
         f" rng={range_text}"
         f" vio={pose.tracking_state}/q{pose.pose_quality}"
         f" odom_sent={sent_count}"
+        f"{soft_text}"
         f" imu={imu_text}"
         f" mavlink={mav_text}"
         f" stage={stage}"
         f"{'' if not reason else f' reason={reason}'}"
     )
-    record_calibration_status(config, stage, fc_state, pose, imu_sample, action=f"status odom_sent={sent_count}", reason=reason)
+    record_calibration_status(
+        config,
+        stage,
+        fc_state,
+        pose,
+        imu_sample,
+        action=f"status odom_sent={sent_count}{soft_text}",
+        reason=reason,
+        soft_summary=soft_summary,
+    )
 
 
 def send_calibration_gcs_message(master, text: str, severity: int | None = None) -> None:
-    if severity is None:
-        send_statustext(master, text)
-    else:
-        send_statustext(master, text, severity=severity)
+    send_gcs_event(
+        master,
+        text,
+        severity=mavutil.mavlink.MAV_SEVERITY_INFO if severity is None else severity,
+    )
 
 
 def send_calibration_failure(connection, config: SlamBridgeConfig, reason: str, change_mode: bool = True) -> None:
@@ -930,14 +1435,45 @@ def run_standby(config: SlamBridgeConfig) -> None:
 
 def run_bridge(config: SlamBridgeConfig) -> None:
     period_s = 1.0 / max(config.rate_hz, 0.1)
+    bridge_started_s = time.time()
+    startup_announced_global = False
+    quick_check_announced_global = False
+    ready_announced_global = False
+    jetson_start_announced_global = False
+    last_mavlink_connect_notice_s = 0.0
+    last_jetson_lifecycle_notice_s = 0.0
+    last_jetson_lifecycle_text = ""
+    last_announced_armed_state: bool | None = None
 
     while True:
         source = None
+        pose_worker = None
+        imu_worker = None
         connection = connect_to_cube_with_retry(config)
         imu_reader = open_imu_with_retry(config)
         lidar_reader = open_lidar_with_retry(config)
         qgc_bridge = open_qgc_bridge(config)
+        loiter_observer = SlamLoiterObserver(config.slam_observer)
         send_companion_heartbeat(connection.master)
+        now_s = time.time()
+        if not jetson_start_announced_global:
+            send_gcs_event(
+                connection.master,
+                (
+                    "JETSON EVENT: Jetson booted; SLAM bridge script started; "
+                    f"MAVLink connected on {connection.port}."
+                ),
+                severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+            )
+            jetson_start_announced_global = True
+            last_mavlink_connect_notice_s = now_s
+        elif now_s - last_mavlink_connect_notice_s >= JETSON_RECONNECT_GCS_INTERVAL_SECONDS:
+            send_gcs_event(
+                connection.master,
+                f"JETSON EVENT: MAVLink reconnected on {connection.port}; SLAM bridge script still running.",
+                severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+            )
+            last_mavlink_connect_notice_s = now_s
         ensure_fc_setup(connection, config)
         configure_telemetry_streams(connection.master)
         fc_state = FlightControllerTelemetry(
@@ -970,6 +1506,40 @@ def run_bridge(config: SlamBridgeConfig) -> None:
             sleep_with_floor(config.reconnect_delay_seconds)
             continue
 
+        imu_worker = ImuSamplerThread(imu_reader, period_s)
+        imu_worker.start()
+        pose_worker = PoseSamplerThread(source, period_s)
+        pose_worker.start()
+        initial_pose, initial_pose_error, _ = pose_worker.wait_initial(timeout_s=3.0)
+        if initial_pose_error is not None or initial_pose is None:
+            reason = (
+                f"VIO/camera first sample unavailable: {initial_pose_error}"
+                if initial_pose_error is not None
+                else "VIO/camera first sample timed out."
+            )
+            print(reason)
+            record_calibration_status(
+                config,
+                "failed",
+                fc_state,
+                None,
+                None,
+                action="source first sample failed",
+                reason=reason,
+            )
+            send_calibration_failed_beeps(connection.master)
+            send_calibration_gcs_message(
+                connection.master,
+                f"Calibration failed: not finished. Reason: {reason}",
+                severity=mavutil.mavlink.MAV_SEVERITY_ERROR,
+            )
+            publish_bridge_state(connection.master, BRIDGE_STATE_IDLE, config.fc_setup.idle_source_set)
+            pose_worker.stop()
+            imu_worker.stop()
+            close_cube_connection(connection)
+            sleep_with_floor(config.reconnect_delay_seconds)
+            continue
+
         calibration_profile = (
             load_calibration_profile(config.calibration.profile_path)
             if config.calibration.profile_path
@@ -988,21 +1558,29 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         last_status_s = 0.0
         last_obstacle_publish_s = 0.0
         last_gps_input_s = 0.0
+        gps_input_period_s = 1.0 / max(config.gps_input.update_rate_hz, 1.0)
+        last_slam_pose_gps2_sent_s = 0.0
+        last_no_gps_poshold_notice_s = 0.0
         last_waiting_message_s = 0.0
         last_active_beep_s = 0.0
         last_slam_flight_ping_s = 0.0
         last_announced_mode = ""
         last_announced_status_text = ""
         last_status_notice_s = 0.0
-        mavlink_detected_s = time.time()
-        startup_announced = False
-        quick_check_announced = False
-        ready_announced = False
+        startup_announced = startup_announced_global
+        quick_check_announced = quick_check_announced_global
+        ready_announced = ready_announced_global
+        field_gate_announced = False
+        last_field_gate_notice_s = 0.0
+        last_field_gate_text = ""
         gps_input_announced = False
+        gps_input_reference_announced = False
+        gps_input_origin_locked_announced = False
         gps_input_origin_missing_announced = False
         brake_announced = False
         ground_warning_announced = False
         height_announced = False
+        idle_source_selected_on_ground = False
         calibration_complete_this_mode = False
         calibration_stage = "idle"
         calibration_axes = ("pitch", "roll", "yaw", "altitude")
@@ -1010,10 +1588,13 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         calibration_stage_start_s = 0.0
         calibration_total_start_s = 0.0
         calibration_reference_pose = None
-        latest_imu_sample = None
+        latest_imu_sample, _ = imu_worker.latest()
+        pose = apply_cube_rangefinder_height(initial_pose, fc_state, config)
         source_started_published = False
+        observer_summary = loiter_observer.startup_summary()
 
         send_gcs_event(connection.master, "VIO service ready. Brake calibration monitor active.")
+        loiter_observer.announce_ready(connection.master)
         if config.calibration.movement_commands_enabled:
             send_gcs_event(
                 connection.master,
@@ -1086,27 +1667,41 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                         fc_state.rangefinder_distance_m if rangefinder_height_valid(fc_state) else None
                     )
 
-                raw_pose = source.sample()
-                if imu_reader is not None:
-                    imu_sample = imu_reader.poll(duration_s=min(0.02, period_s))
-                    if imu_sample is not None:
-                        latest_imu_sample = imu_sample
-                        raw_pose = apply_imu_sample_to_pose(raw_pose, imu_sample)
+                raw_pose, pose_error, _ = pose_worker.latest()
+                if pose_error is not None:
+                    raise RuntimeError(f"VIO/camera sampler failed: {pose_error}")
+                if raw_pose is None:
+                    continue
+                latest_imu_sample, imu_error = imu_worker.latest()
+                if imu_error is not None:
+                    print(f"External IMU sample skipped: {imu_error}")
+                if latest_imu_sample is not None:
+                    raw_pose = apply_imu_sample_to_pose(raw_pose, latest_imu_sample)
                 raw_pose = apply_cube_rangefinder_height(raw_pose, fc_state, config)
                 pose = apply_calibration_profile(raw_pose, calibration_profile)
                 now_s = time.time()
                 calibration_mode_requested = in_brake_calibration_mode(fc_state, config)
+                observer_summary = loiter_observer.update(
+                    connection.master,
+                    fc_state,
+                    raw_pose,
+                    latest_imu_sample,
+                    imu_expected=config.imu_enabled,
+                )
+                stream_pose = loiter_observer.apply_soft_correction(pose)
 
-                if (
-                    gps_input_stream_requested(
-                        pose,
-                        fc_state,
-                        config,
-                        calibration_profile,
-                        calibration_mode_requested,
-                    )
-                    and now_s - last_gps_input_s >= 0.2
-                ):
+                slam_gps_input_requested = gps_input_stream_requested(
+                    stream_pose,
+                    fc_state,
+                    config,
+                    calibration_profile,
+                    calibration_mode_requested,
+                    observer_summary,
+                )
+                if slam_gps_input_requested and now_s - last_gps_input_s >= gps_input_period_s:
+                    # SLAM GPS2 feed: only active in the configured SLAM mode
+                    # and only after calibration or LOITER observation says the
+                    # pose is good enough for a cautious POSHOLD test.
                     if config.gps_input.fixed_fix:
                         send_fixed_gps_input(connection.master, config.gps_input)
                         if not gps_input_announced:
@@ -1117,7 +1712,22 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                             )
                             gps_input_announced = True
                     else:
-                        sent_gps_input = send_gps_input_from_pose(connection.master, pose, config.gps_input)
+                        if lock_gps_input_origin_from_reference(stream_pose, fc_state, config):
+                            gps_input_origin_missing_announced = False
+                            if not gps_input_origin_locked_announced:
+                                send_gcs_event(
+                                    connection.master,
+                                    "GPS2 origin locked from healthy GPS/EKF reference.",
+                                )
+                                gps_input_origin_locked_announced = True
+                        sent_gps_input = send_gps_input_from_pose(
+                            connection.master,
+                            stream_pose,
+                            config.gps_input,
+                            fc_state,
+                        )
+                        if sent_gps_input:
+                            last_slam_pose_gps2_sent_s = now_s
                         if sent_gps_input and not gps_input_announced:
                             send_gcs_event(
                                 connection.master,
@@ -1132,11 +1742,57 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                             )
                             gps_input_origin_missing_announced = True
                     last_gps_input_s = now_s
+                elif (
+                    using_gps_input_bridge(config)
+                    and not config.gps_input.fixed_fix
+                    and now_s - last_gps_input_s >= gps_input_period_s
+                ):
+                    # Standby GPS2 feed: outside SLAM mode, mirror the real GPS
+                    # into GPS2 when GPS1 is healthy so ArduPilot does not see a
+                    # permanently bad second GPS while the pilot flies LOITER.
+                    sent_reference_gps2 = send_gps_input_from_fc_reference(
+                        connection.master,
+                        fc_state,
+                        config.gps_input,
+                    )
+                    if sent_reference_gps2:
+                        if not gps_input_reference_announced:
+                            send_gcs_event(
+                                connection.master,
+                                f"GPS{config.gps_input.gps_id + 1} standby mirrors real GPS until SLAM is ready.",
+                            )
+                            gps_input_reference_announced = True
+                        last_gps_input_s = now_s
 
                 if fc_state.flight_mode != last_announced_mode:
-                    message, severity = mode_event_message(pose, fc_state, config, calibration_profile)
+                    message, severity = mode_event_message(
+                        pose,
+                        fc_state,
+                        config,
+                        calibration_profile,
+                        observer_summary,
+                    )
                     send_gcs_event(connection.master, message, severity=severity)
                     last_announced_mode = fc_state.flight_mode
+
+                if (
+                    not idle_source_selected_on_ground
+                    and not fc_state.armed
+                    and not calibration_mode_requested
+                    and config.fc_setup.idle_source_set > 0
+                ):
+                    if set_ekf_source_set(connection.master, config.fc_setup.idle_source_set, timeout_s=1.5) is True:
+                        fc_state.active_source_set = config.fc_setup.idle_source_set
+                        publish_bridge_state(
+                            connection.master,
+                            BRIDGE_STATE_SOURCE_SET_ACTIVE,
+                            config.fc_setup.idle_source_set,
+                        )
+                        send_gcs_event(
+                            connection.master,
+                            f"GPS/EKF source set {config.fc_setup.idle_source_set} selected for normal arming.",
+                        )
+                    idle_source_selected_on_ground = True
 
                 if (
                     fc_state.status_text
@@ -1178,9 +1834,65 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                     last_announced_status_text = fc_state.status_text
                     last_status_notice_s = now_s
 
-                if not startup_announced and now_s - mavlink_detected_s >= 60.0:
+                field_gate_reasons = field_gate_block_reasons(pose, latest_imu_sample, fc_state, config)
+                if not field_gate_reasons:
+                    if not field_gate_announced:
+                        send_gcs_event(
+                            connection.master,
+                            (
+                                "FIELD GATE OK: GPS LOITER and BRAKE calibration inputs ready. "
+                                "Wait for NO-GPS POSHOLD GATE before SLAM PosHold."
+                            ),
+                            severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+                        )
+                        field_gate_announced = True
+                        last_field_gate_notice_s = now_s
+                        last_field_gate_text = "ok"
+                else:
+                    field_gate_announced = False
+                    field_gate_text = f"FIELD GATE WAIT: {_compact_reasons(field_gate_reasons)}"
+                    field_gate_elapsed_s = now_s - last_field_gate_notice_s
+                    if (
+                        last_field_gate_notice_s <= 0.0
+                        or field_gate_elapsed_s >= FIELD_GATE_GCS_INTERVAL_SECONDS
+                        or (
+                            field_gate_text != last_field_gate_text
+                            and field_gate_elapsed_s >= FIELD_GATE_CHANGE_MIN_INTERVAL_SECONDS
+                        )
+                    ):
+                        send_gcs_event(
+                            connection.master,
+                            field_gate_text,
+                            severity=mavutil.mavlink.MAV_SEVERITY_WARNING,
+                        )
+                        last_field_gate_notice_s = now_s
+                        last_field_gate_text = field_gate_text
+
+                lifecycle_text = jetson_lifecycle_message(fc_state, config, field_gate_reasons)
+                armed_changed = (
+                    last_announced_armed_state is None
+                    or bool(fc_state.armed) != bool(last_announced_armed_state)
+                )
+                lifecycle_changed = lifecycle_text != last_jetson_lifecycle_text
+                lifecycle_elapsed_s = now_s - last_jetson_lifecycle_notice_s
+                if (
+                    last_jetson_lifecycle_notice_s <= 0.0
+                    or lifecycle_elapsed_s >= JETSON_EVENT_GCS_INTERVAL_SECONDS
+                    or ((armed_changed or lifecycle_changed) and lifecycle_elapsed_s >= 8.0)
+                ):
+                    send_gcs_event(
+                        connection.master,
+                        lifecycle_text,
+                        severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+                    )
+                    last_announced_armed_state = bool(fc_state.armed)
+                    last_jetson_lifecycle_notice_s = now_s
+                    last_jetson_lifecycle_text = lifecycle_text
+
+                if not startup_announced and now_s - bridge_started_s >= STARTUP_BEEP_DELAY_SECONDS:
                     send_startup_beeps(connection.master)
                     startup_announced = True
+                    startup_announced_global = True
 
                 if not quick_check_announced and sensor_quick_check_ok(
                     pose,
@@ -1191,14 +1903,33 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                     send_sensor_check_beep(connection.master)
                     publish_bridge_state(connection.master, BRIDGE_STATE_SENSOR_CHECK_PASSED, config.fc_setup.idle_source_set)
                     quick_check_announced = True
+                    quick_check_announced_global = True
 
                 if (
                     not ready_announced
-                    and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile)
+                    and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile, observer_summary)
                 ):
+                    if calibration_profile.valid:
+                        ready_source = "Brake calibration profile"
+                    elif observer_ready_for_gps2_poshold(observer_summary, config):
+                        ready_source = "LOITER observer"
+                    else:
+                        ready_source = "SLAM gate"
+                    score_text = ""
+                    if observer_summary is not None and "score" in observer_summary:
+                        score_text = f" score={float(observer_summary.get('score', 0.0)):.1f}/10"
+                    send_gcs_event(
+                        connection.master,
+                        (
+                            f"NO-GPS POSHOLD GATE OK: {ready_source} ready{score_text}. "
+                            "POSHOLD can use SLAM/VIO GPS2 feed cautiously."
+                        ),
+                        severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+                    )
                     send_ready_beeps(connection.master)
                     publish_bridge_state(connection.master, BRIDGE_STATE_POSHOLD_READY, config.fc_setup.slam_source_set)
                     ready_announced = True
+                    ready_announced_global = True
 
                 active_stage = calibration_stage in calibration_axes
 
@@ -1253,17 +1984,34 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                     elif vehicle_on_ground_for_calibration(fc_state, config):
                         calibration_stage = "waiting_takeoff"
                         calibration_accumulator.reset()
+                        current_height = (
+                            "unknown"
+                            if fc_state.rangefinder_distance_m is None
+                            else f"{fc_state.rangefinder_distance_m:.2f}m"
+                        )
+                        publish_bridge_state(
+                            connection.master,
+                            BRIDGE_STATE_CALIBRATION_WAITING_TAKEOFF,
+                            config.fc_setup.idle_source_set,
+                        )
                         if not ground_warning_announced:
                             send_ground_calibration_warning_beeps(connection.master)
                             send_calibration_gcs_message(
                                 connection.master,
-                                "Armed in Brake mode. SLAM calibration takeoff sequence active.",
+                                "Brake calibration waiting: vehicle still on ground.",
                             )
                             send_calibration_gcs_message(
                                 connection.master,
-                                "No automatic takeoff: pilot must take off and enter Brake near 5m.",
+                                "Take off first, then enter/hold Brake near"
+                                f" {config.calibration.target_height_m:.1f}m AGL; current={current_height}.",
                             )
+                            last_waiting_message_s = now_s
                             ground_warning_announced = True
+                        else:
+                            announce_waiting(
+                                "Brake calibration waiting for takeoff:"
+                                f" rangefinder={current_height}, target={config.calibration.target_height_m:.1f}m AGL."
+                            )
                     elif calibration_complete_this_mode:
                         pass
                     else:
@@ -1283,6 +2031,11 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                                 "unknown"
                                 if fc_state.rangefinder_distance_m is None
                                 else f"{fc_state.rangefinder_distance_m:.2f}m"
+                            )
+                            publish_bridge_state(
+                                connection.master,
+                                BRIDGE_STATE_CALIBRATION_WAITING_TAKEOFF,
+                                config.fc_setup.idle_source_set,
                             )
                             announce_waiting(
                                 "Brake calibration waiting for rangefinder"
@@ -1489,7 +2242,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                 wants_poshold_slam = (
                     not config.calibration.dry_run
                     and mode_wants_slam(fc_state, config)
-                    and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile)
+                    and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile, observer_summary)
                     and sent_count >= config.fc_setup.switch_after_sends
                 )
                 if (
@@ -1524,11 +2277,27 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                         publish_bridge_state(connection.master, BRIDGE_STATE_SOURCE_SET_ACTIVE, config.fc_setup.idle_source_set)
                     last_release_attempt_s = now_s
 
-                if active_slam_flight(pose, fc_state, config, calibration_profile):
+                if active_slam_flight(pose, fc_state, config, calibration_profile, observer_summary):
                     if now_s - last_slam_flight_ping_s >= 6.0:
                         send_slam_flight_ping(connection.master)
                         publish_bridge_state(connection.master, BRIDGE_STATE_SLAM_FLIGHT_ACTIVE, config.fc_setup.slam_source_set)
                         last_slam_flight_ping_s = now_s
+                    no_gps_poshold_active = (
+                        using_gps_input_bridge(config)
+                        and not config.gps_input.fixed_fix
+                        and fc_state.flight_mode.upper() == config.fc_setup.activate_mode.strip().upper()
+                        and now_s - last_slam_pose_gps2_sent_s <= 1.0
+                    )
+                    if (
+                        no_gps_poshold_active
+                        and now_s - last_no_gps_poshold_notice_s >= NO_GPS_POSHOLD_GCS_INTERVAL_SECONDS
+                    ):
+                        send_gcs_event(
+                            connection.master,
+                            "No-GPS POSHOLD active: SLAM/VIO GPS2 feed is flying without real GPS.",
+                            severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+                        )
+                        last_no_gps_poshold_notice_s = now_s
 
                 if lidar_reader is not None and now_s - last_obstacle_publish_s >= 1.0 / max(config.obstacle.publish_rate_hz, 0.1):
                     try:
@@ -1551,6 +2320,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                         config,
                         sent_count=sent_count,
                         reason=pose_safety_reason(pose, fc_state, config) or "",
+                        soft_summary=observer_summary,
                     )
                     last_status_s = now_s
 
@@ -1565,6 +2335,16 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                 publish_bridge_state(connection.master, BRIDGE_STATE_IDLE, config.fc_setup.idle_source_set)
             except Exception:
                 pass
+            if pose_worker is not None:
+                try:
+                    pose_worker.stop()
+                except Exception:
+                    pass
+            if imu_worker is not None:
+                try:
+                    imu_worker.stop()
+                except Exception:
+                    pass
             if source is not None and hasattr(source, "close"):
                 try:
                     source.close()

@@ -1,3 +1,11 @@
+"""YAML-backed configuration model for the SLAM bridge.
+
+The service loads `config/autostart.yaml`, maps it into these dataclasses, and
+then passes the strongly-typed object through the bridge. A lot of flight safety
+comes from defaults here: if a key is absent, the default should be cautious and
+should not command motion unexpectedly.
+"""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +34,12 @@ def _as_bool(value: Any) -> bool:
 
 @dataclass
 class ObstacleAvoidanceConfig:
+    """LiDAR/proximity publisher settings.
+
+    Publishing obstacle distances is separate from commanding movement. Keep
+    `enabled` false until SLAM position hold itself is stable.
+    """
+
     enabled: bool = True
     lidar_enabled: bool = True
     lidar_port: str = "auto"
@@ -50,6 +64,12 @@ class QgcBridgeConfig:
 
 @dataclass
 class GpsInputConfig:
+    """MAVLink GPS_INPUT settings for the GPS2 bridge path.
+
+    `gps_id=1` means ArduPilot receives this as GPS2. `fixed_fix` is diagnostic
+    only; flight code should use an origin plus live pose or standby GPS mirror.
+    """
+
     enabled: bool = False
     gps_id: int = 1
     fixed_fix: bool = False
@@ -63,6 +83,7 @@ class GpsInputConfig:
     horiz_accuracy_m: float = 0.5
     vert_accuracy_m: float = 1.0
     speed_accuracy_m_s: float = 0.3
+    update_rate_hz: float = 8.0
 
 
 @dataclass
@@ -77,6 +98,13 @@ class LidarSteeringConfig:
 
 @dataclass
 class CalibrationConfig:
+    """Real Brake-mode calibration workflow.
+
+    This workflow is deliberately separate from the LOITER observer. Brake mode
+    is the explicit pilot trigger for real calibration, while LOITER only learns
+    confidence and bounded soft-correction estimates in the background.
+    """
+
     enabled: bool = True
     mode: str = "BRAKE"
     duration_s: float = 12.0
@@ -114,7 +142,47 @@ class CalibrationConfig:
 
 
 @dataclass
+class SoftCalibrationConfig:
+    enabled: bool = True
+    mode: str = "LOITER"
+    duration_s: float = 20.0
+    min_samples: int = 120
+    min_gps_fix_type: int = 3
+    min_gps_satellites: int = 8
+    min_pose_quality: int = 45
+    announce_interval_s: float = 10.0
+    ready_score_threshold: float = 7.0
+    low_score_threshold: float = 5.0
+    critical_score_threshold: float = 3.0
+    save_improvement_threshold: float = 0.3
+    profile_path: str = "runtime/loiter_soft_calibration.json"
+    sample_log_path: str = "logs/loiter_soft_learning.jsonl"
+    sample_log_hz: float = 1.0
+    fallback_enabled: bool = True
+    fallback_mode: str = "LOITER"
+
+
+@dataclass
+class SlamObserverConfig:
+    """GPS-assisted LOITER observation and GPS2 gating settings."""
+
+    enable_loiter_observation: bool = True
+    observation_message_interval_sec: float = 20.0
+    min_quality_for_poshold: float = 7.0
+    weak_quality_threshold: float = 5.0
+    critical_quality_threshold: float = 3.0
+    quality_update_delta: float = 0.5
+    enable_live_soft_correction: bool = False
+    enable_auto_fallback_to_loiter: bool = False
+    log_observation_data: bool = True
+    log_path: str = "logs/slam_loiter_observer.log"
+    status_path: str = "logs/slam_loiter_observer_status.json"
+
+
+@dataclass
 class SlamBridgeConfig:
+    """Top-level configuration consumed by the long-running bridge service."""
+
     ports: list[str] = field(default_factory=_default_ports)
     baud: int = 115200
     source: str = "standby"
@@ -130,13 +198,15 @@ class SlamBridgeConfig:
     status_log_seconds: float = 10.0
     heartbeat_timeout_seconds: float = 8.0
     connect_in_standby: bool = True
-    boot_delay_seconds: float = 60.0
+    boot_delay_seconds: float = 30.0
     fc_setup: FlightControllerSetupConfig = field(default_factory=FlightControllerSetupConfig)
     obstacle: ObstacleAvoidanceConfig = field(default_factory=ObstacleAvoidanceConfig)
     qgc: QgcBridgeConfig = field(default_factory=QgcBridgeConfig)
     gps_input: GpsInputConfig = field(default_factory=GpsInputConfig)
     lidar_steering: LidarSteeringConfig = field(default_factory=LidarSteeringConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    soft_calibration: SoftCalibrationConfig = field(default_factory=SoftCalibrationConfig)
+    slam_observer: SlamObserverConfig = field(default_factory=SlamObserverConfig)
     # Robustness settings for announcing the SLAM stream
     stream_stable_s: float = 2.0
     stream_loss_hysteresis_s: float = 5.0
@@ -171,6 +241,12 @@ class SlamBridgeConfig:
         calibration_data = data.get("calibration", {}) or {}
         if not isinstance(calibration_data, dict):
             raise ValueError("config 'calibration' must be a mapping")
+        soft_calibration_data = data.get("soft_calibration", {}) or {}
+        if not isinstance(soft_calibration_data, dict):
+            raise ValueError("config 'soft_calibration' must be a mapping")
+        slam_observer_data = data.get("slam_observer", {}) or {}
+        if not isinstance(slam_observer_data, dict):
+            raise ValueError("config 'slam_observer' must be a mapping")
         profile_path = str(calibration_data.get("profile_path", "runtime/slam_calibration.json") or "")
         if profile_path and not Path(profile_path).is_absolute():
             profile_path = str((base_dir / profile_path).resolve())
@@ -180,6 +256,26 @@ class SlamBridgeConfig:
         log_path = str(calibration_data.get("log_path", "logs/slam_calibration.log") or "")
         if log_path and not Path(log_path).is_absolute():
             log_path = str((base_dir / log_path).resolve())
+        soft_profile_path = str(
+            soft_calibration_data.get("profile_path", "runtime/loiter_soft_calibration.json") or ""
+        )
+        if soft_profile_path and not Path(soft_profile_path).is_absolute():
+            soft_profile_path = str((base_dir / soft_profile_path).resolve())
+        soft_sample_log_path = str(
+            soft_calibration_data.get("sample_log_path", "logs/loiter_soft_learning.jsonl") or ""
+        )
+        if soft_sample_log_path and not Path(soft_sample_log_path).is_absolute():
+            soft_sample_log_path = str((base_dir / soft_sample_log_path).resolve())
+        observer_log_path = str(
+            slam_observer_data.get("log_path", "logs/slam_loiter_observer.log") or ""
+        )
+        if observer_log_path and not Path(observer_log_path).is_absolute():
+            observer_log_path = str((base_dir / observer_log_path).resolve())
+        observer_status_path = str(
+            slam_observer_data.get("status_path", "logs/slam_loiter_observer_status.json") or ""
+        )
+        if observer_status_path and not Path(observer_status_path).is_absolute():
+            observer_status_path = str((base_dir / observer_status_path).resolve())
         return cls(
             ports=[str(port) for port in ports],
             baud=int(data.get("baud", 115200)),
@@ -196,7 +292,7 @@ class SlamBridgeConfig:
             status_log_seconds=float(data.get("status_log_seconds", 10.0)),
             heartbeat_timeout_seconds=float(data.get("heartbeat_timeout_seconds", 8.0)),
             connect_in_standby=_as_bool(data.get("connect_in_standby", True)),
-            boot_delay_seconds=float(data.get("boot_delay_seconds", 60.0)),
+            boot_delay_seconds=float(data.get("boot_delay_seconds", 30.0)),
             fc_setup=FlightControllerSetupConfig(
                 enabled=_as_bool(fc_setup_data.get("enabled", True)),
                 slam_source_set=int(fc_setup_data.get("slam_source_set", 3)),
@@ -271,6 +367,7 @@ class SlamBridgeConfig:
                 horiz_accuracy_m=float(gps_input_data.get("horiz_accuracy_m", 0.5)),
                 vert_accuracy_m=float(gps_input_data.get("vert_accuracy_m", 1.0)),
                 speed_accuracy_m_s=float(gps_input_data.get("speed_accuracy_m_s", 0.3)),
+                update_rate_hz=float(gps_input_data.get("update_rate_hz", 8.0)),
             ),
             lidar_steering=LidarSteeringConfig(
                 enabled=_as_bool(lidar_steering_data.get("enabled", False)),
@@ -317,13 +414,65 @@ class SlamBridgeConfig:
                 movement_speed_m_s=float(calibration_data.get("movement_speed_m_s", 0.12)),
                 vertical_speed_m_s=float(calibration_data.get("vertical_speed_m_s", 0.08)),
                 altitude_hold_gain=float(calibration_data.get("altitude_hold_gain", 0.25)),
-                altitude_hold_deadband_m=float(altitude_hold_deadband_m := 0.12),
+                altitude_hold_deadband_m=float(calibration_data.get("altitude_hold_deadband_m", 0.12)),
                 yaw_rate_deg_s=float(calibration_data.get("yaw_rate_deg_s", 6.0)),
                 dry_run=_as_bool(calibration_data.get("dry_run", False)),
                 kill_switch_confirmed=_as_bool(calibration_data.get("kill_switch_confirmed", False)),
                 min_battery_remaining_pct=int(calibration_data.get("min_battery_remaining_pct", 20)),
                 status_path=status_path,
                 log_path=log_path,
+            ),
+            soft_calibration=SoftCalibrationConfig(
+                enabled=_as_bool(soft_calibration_data.get("enabled", True)),
+                mode=str(soft_calibration_data.get("mode", "LOITER")).upper(),
+                duration_s=float(soft_calibration_data.get("duration_s", 20.0)),
+                min_samples=int(soft_calibration_data.get("min_samples", 120)),
+                min_gps_fix_type=int(soft_calibration_data.get("min_gps_fix_type", 3)),
+                min_gps_satellites=int(soft_calibration_data.get("min_gps_satellites", 8)),
+                min_pose_quality=int(soft_calibration_data.get("min_pose_quality", 45)),
+                announce_interval_s=float(soft_calibration_data.get("announce_interval_s", 10.0)),
+                ready_score_threshold=float(soft_calibration_data.get("ready_score_threshold", 7.0)),
+                low_score_threshold=float(soft_calibration_data.get("low_score_threshold", 5.0)),
+                critical_score_threshold=float(soft_calibration_data.get("critical_score_threshold", 3.0)),
+                save_improvement_threshold=float(
+                    soft_calibration_data.get("save_improvement_threshold", 0.3)
+                ),
+                profile_path=soft_profile_path,
+                sample_log_path=soft_sample_log_path,
+                sample_log_hz=float(soft_calibration_data.get("sample_log_hz", 1.0)),
+                fallback_enabled=_as_bool(soft_calibration_data.get("fallback_enabled", True)),
+                fallback_mode=str(soft_calibration_data.get("fallback_mode", "LOITER")).upper(),
+            ),
+            slam_observer=SlamObserverConfig(
+                enable_loiter_observation=_as_bool(
+                    slam_observer_data.get("enable_loiter_observation", True)
+                ),
+                observation_message_interval_sec=float(
+                    slam_observer_data.get("observation_message_interval_sec", 20.0)
+                ),
+                min_quality_for_poshold=float(
+                    slam_observer_data.get("min_quality_for_poshold", 7.0)
+                ),
+                weak_quality_threshold=float(
+                    slam_observer_data.get("weak_quality_threshold", 5.0)
+                ),
+                critical_quality_threshold=float(
+                    slam_observer_data.get("critical_quality_threshold", 3.0)
+                ),
+                quality_update_delta=float(
+                    slam_observer_data.get("quality_update_delta", 0.5)
+                ),
+                enable_live_soft_correction=_as_bool(
+                    slam_observer_data.get("enable_live_soft_correction", False)
+                ),
+                enable_auto_fallback_to_loiter=_as_bool(
+                    slam_observer_data.get("enable_auto_fallback_to_loiter", False)
+                ),
+                log_observation_data=_as_bool(
+                    slam_observer_data.get("log_observation_data", True)
+                ),
+                log_path=observer_log_path,
+                status_path=observer_status_path,
             ),
             stream_stable_s=float(data.get("stream_stable_s", 2.0)),
             stream_loss_hysteresis_s=float(data.get("stream_loss_hysteresis_s", 5.0)),
@@ -335,4 +484,7 @@ def load_bridge_config(path: str | Path) -> SlamBridgeConfig:
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Bridge config must be a mapping: {config_path}")
-    return SlamBridgeConfig.from_mapping(data, base_dir=config_path.parent)
+    base_dir = config_path.parent
+    if base_dir.name == "config":
+        base_dir = base_dir.parent
+    return SlamBridgeConfig.from_mapping(data, base_dir=base_dir)

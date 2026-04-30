@@ -18,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
 
 try:
     from pymavlink import mavutil
+    from slam_core.fc_config import current_gps_week_time
 except ImportError:
     print("Error: pymavlink not installed.")
     sys.exit(1)
@@ -34,14 +35,15 @@ def send_fake_gps_stream(master, lat, lon, alt, stop_event):
     while not stop_event.is_set():
         try:
             now_us = int(time.time() * 1e6)
+            gps_week, gps_week_ms = current_gps_week_time()
             # Send to GPS 1 (ID 0) and GPS 2 (ID 1)
             for gps_id in [0, 1]:
                 master.mav.gps_input_send(
                     now_us,
                     gps_id, # gps_id
                     0, # ignore_flags
-                    0, # time_week_ms
-                    0, # time_week
+                    gps_week_ms, # time_week_ms
+                    gps_week, # time_week
                     3, # fix_type (3 = 3D Fix)
                     int(lat * 1e7),
                     int(lon * 1e7),
