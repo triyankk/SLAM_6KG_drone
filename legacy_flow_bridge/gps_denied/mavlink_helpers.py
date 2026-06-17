@@ -19,6 +19,7 @@ except Exception:
 DEFAULT_PORTS = ["/dev/ttyACM1", "/dev/ttyACM0"]
 LUA_STATUS_PARAM = "SCR_USER1"
 LUA_SOURCE_SET_PARAM = "SCR_USER2"
+LUA_HEARTBEAT_PARAM = "SCR_USER3"
 
 
 @dataclass
@@ -106,7 +107,13 @@ def wait_for_vehicle_heartbeat(master, source_system: int, timeout_s: float = 6.
     ignored = []
 
     while time.time() <= deadline:
-        msg = master.recv_match(type="HEARTBEAT", blocking=True, timeout=0.5)
+        try:
+            msg = master.recv_match(type="HEARTBEAT", blocking=True, timeout=0.5)
+        except TypeError as exc:
+            if "NoneType" not in str(exc):
+                raise
+            print(f"Ignoring pymavlink heartbeat cache glitch: {exc}")
+            continue
         if msg is None:
             continue
 
@@ -164,6 +171,15 @@ def _normalize_param_id(param_id) -> str:
     return str(param_id).rstrip("\x00")
 
 
+def _recv_match_ignore_cache_glitch(master, **kwargs):
+    try:
+        return master.recv_match(**kwargs)
+    except TypeError as exc:
+        if "NoneType" not in str(exc):
+            raise
+        return None
+
+
 def request_parameter(master, name: str, timeout_s: float = 2.0) -> Optional[float]:
     master.mav.param_request_read_send(
         master.target_system,
@@ -174,7 +190,7 @@ def request_parameter(master, name: str, timeout_s: float = 2.0) -> Optional[flo
 
     deadline = time.time() + max(timeout_s, 0.0)
     while time.time() <= deadline:
-        msg = master.recv_match(blocking=True, timeout=0.5)
+        msg = _recv_match_ignore_cache_glitch(master, blocking=True, timeout=0.5)
         if msg is None or msg.get_type() != "PARAM_VALUE":
             continue
         if _normalize_param_id(getattr(msg, "param_id", "")) != name:
@@ -195,7 +211,7 @@ def set_parameter(master, name: str, value: float, timeout_s: float = 3.0) -> Op
 
     deadline = time.time() + max(timeout_s, 0.0)
     while time.time() <= deadline:
-        msg = master.recv_match(blocking=True, timeout=0.5)
+        msg = _recv_match_ignore_cache_glitch(master, blocking=True, timeout=0.5)
         if msg is None or msg.get_type() != "PARAM_VALUE":
             continue
         if _normalize_param_id(getattr(msg, "param_id", "")) != name:
@@ -222,7 +238,7 @@ def set_ekf_source_set(master, source_set_id: int, timeout_s: float = 3.0) -> Op
 
     deadline = time.time() + max(timeout_s, 0.0)
     while time.time() <= deadline:
-        msg = master.recv_match(blocking=True, timeout=0.5)
+        msg = _recv_match_ignore_cache_glitch(master, blocking=True, timeout=0.5)
         if msg is None or msg.get_type() != "COMMAND_ACK":
             continue
         if int(getattr(msg, "command", -1)) != mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET:
@@ -239,9 +255,44 @@ def set_ekf_source_set(master, source_set_id: int, timeout_s: float = 3.0) -> Op
 def publish_lua_status(master, status_code: int, source_set_id: Optional[int] = None) -> bool:
     """Publish a low-rate state code for an FC-side Lua relay script.
 
-    This intentionally uses the reserved SCR_USER parameters and should only be
-    called on state transitions, not in a tight loop.
+    This intentionally uses the reserved SCR_USER parameters as a tiny status
+    bus for the Cube-side Lua scripts. Keep it non-blocking: status updates must
+    never stall the flight loop while waiting for PARAM_VALUE echoes.
     """
+    heartbeat = float(int(time.monotonic()) % 1000000)
+    try:
+        if source_set_id is not None:
+            master.mav.param_set_send(
+                master.target_system,
+                master.target_component,
+                LUA_SOURCE_SET_PARAM.encode("ascii"),
+                float(source_set_id),
+                mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+            )
+        master.mav.param_set_send(
+            master.target_system,
+            master.target_component,
+            LUA_STATUS_PARAM.encode("ascii"),
+            float(status_code),
+            mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+        )
+        master.mav.param_set_send(
+            master.target_system,
+            master.target_component,
+            LUA_HEARTBEAT_PARAM.encode("ascii"),
+            heartbeat,
+            mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+        )
+        return True
+    except Exception as exc:
+        print(f"Unable to publish Lua status code {status_code}: {exc}")
+        return False
+
+
+def publish_lua_status_with_ack(
+    master, status_code: int, source_set_id: Optional[int] = None
+) -> bool:
+    """Blocking variant kept for bench diagnostics that need PARAM_VALUE proof."""
     if source_set_id is not None:
         source_applied = set_parameter(master, LUA_SOURCE_SET_PARAM, float(source_set_id))
         if source_applied is not True:
@@ -256,7 +307,7 @@ def publish_lua_status(master, status_code: int, source_set_id: Optional[int] = 
         print(f"Unable to publish Lua status code {status_code} to {LUA_STATUS_PARAM}.")
         return False
 
-    return True
+    return set_parameter(master, LUA_HEARTBEAT_PARAM, float(int(time.monotonic()) % 1000000)) is True
 
 
 def wait_for_gps_home(
@@ -268,6 +319,7 @@ def wait_for_gps_home(
     gcs_status_interval_s: float = 5.0,
     message_callback=None,
     idle_callback=None,
+    gcs_text_callback=None,
 ) -> Optional[GlobalFix]:
     wait_forever = timeout_s <= 0
     deadline = None if wait_forever else time.time() + timeout_s
@@ -281,17 +333,41 @@ def wait_for_gps_home(
     last_lon_deg: Optional[float] = None
     global_fallback: Optional[GlobalFix] = None
 
+    def gps_raw_ready() -> bool:
+        return (
+            last_fix_type is not None
+            and last_sats is not None
+            and last_fix_type >= min_fix_type
+            and last_sats >= min_sats
+        )
+
     def build_gps_status_text() -> str:
         if last_fix_type is not None or last_sats is not None:
-            return f"GPS status fix={last_fix_type or 0} sats={last_sats or 0}"
+            return f"GPS-DENIED WAIT: GPS fix={last_fix_type or 0} sats={last_sats or 0}"
         if last_source == "GLOBAL_POSITION_INT":
-            return "GPS position seen, waiting raw fix"
-        return "Trying to get home position from GPS"
+            return "GPS-DENIED WAIT: GPS raw fix"
+        return "GPS-DENIED WAIT: need GPS home"
+
+    def emit_gcs_text(text: str, severity=mavutil.mavlink.MAV_SEVERITY_NOTICE) -> None:
+        send_statustext(master, text, severity)
+        if gcs_text_callback is not None:
+            gcs_text_callback(text, severity)
 
     while wait_forever or time.time() <= deadline:
         if idle_callback is not None:
             idle_callback()
-        msg = master.recv_match(blocking=True, timeout=0.2)
+        try:
+            msg = _recv_match_ignore_cache_glitch(master, blocking=True, timeout=0.2)
+        except Exception as exc:
+            try:
+                master.close()
+            except Exception:
+                pass
+            raise RuntimeError(
+                "Cube USB MAVLink read failed while waiting for GPS home. "
+                "This usually means the USB cable reset, the Cube rebooted, "
+                "or another process fought for /dev/ttyACM."
+            ) from exc
         now = time.time()
         if idle_callback is not None:
             idle_callback()
@@ -300,9 +376,8 @@ def wait_for_gps_home(
                 print("Waiting for GPS home: no GPS telemetry yet")
                 next_status = now + status_period
             if now >= next_gcs_status:
-                send_statustext(
-                    master,
-                    "GPS waiting for telemetry",
+                emit_gcs_text(
+                    "GPS-DENIED WAIT: no GPS telemetry",
                     mavutil.mavlink.MAV_SEVERITY_NOTICE,
                 )
                 next_gcs_status = now + max(gcs_status_interval_s, 1.0)
@@ -320,9 +395,10 @@ def wait_for_gps_home(
                 last_source = msg_type
                 last_lat_deg = lat / 1e7
                 last_lon_deg = lon / 1e7
-                send_statustext(
-                    master,
-                    "GPS home position received",
+                if not gps_raw_ready():
+                    continue
+                emit_gcs_text(
+                    "GPS-DENIED READY: home/origin locked",
                     mavutil.mavlink.MAV_SEVERITY_NOTICE,
                 )
                 return GlobalFix(
@@ -346,12 +422,10 @@ def wait_for_gps_home(
             if (
                 lat != 0
                 and lon != 0
-                and last_fix_type >= min_fix_type
-                and last_sats >= min_sats
+                and gps_raw_ready()
             ):
-                send_statustext(
-                    master,
-                    f"GPS ready fix={last_fix_type} sats={last_sats}",
+                emit_gcs_text(
+                    f"GPS-DENIED READY: fix={last_fix_type} sats={last_sats}",
                     mavutil.mavlink.MAV_SEVERITY_NOTICE,
                 )
                 return GlobalFix(
@@ -392,16 +466,14 @@ def wait_for_gps_home(
             next_status = now + status_period
 
         if now >= next_gcs_status:
-            send_statustext(
-                master,
+            emit_gcs_text(
                 build_gps_status_text(),
                 mavutil.mavlink.MAV_SEVERITY_NOTICE,
             )
             next_gcs_status = now + max(gcs_status_interval_s, 1.0)
 
     if global_fallback is not None:
-        send_statustext(
-            master,
+        emit_gcs_text(
             "GPS fallback using global position",
             mavutil.mavlink.MAV_SEVERITY_WARNING,
         )
@@ -480,7 +552,16 @@ def play_tune(master, tune: str) -> bool:
 
 def drain_messages(master, state: TelemetryState):
     while True:
-        msg = master.recv_match(blocking=False)
+        try:
+            msg = _recv_match_ignore_cache_glitch(master, blocking=False)
+        except Exception as exc:
+            try:
+                master.close()
+            except Exception:
+                pass
+            raise RuntimeError(
+                "Cube USB MAVLink read failed while draining telemetry."
+            ) from exc
         if msg is None:
             break
 

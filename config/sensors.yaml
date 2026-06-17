@@ -6,21 +6,91 @@ lidar:
   lidar_port: "auto"
   lidar_baud: 3000000
   max_detection_range_m: 7.0
-  danger_distance_m: 2.0
-  warning_distance_m: 3.0
+  danger_distance_m: 1.5
+  warning_distance_m: 2.5
   stale_timeout_sec: 0.5
   min_points_per_zone: 3
-  min_valid_distance_m: 0.15
+  # Ignore very short JT16 returns from the drone frame/arms/landing gear.
+  # Values below this are usually self-reflections on the top-mounted sensor.
+  min_valid_distance_m: 0.45
+  # Require several valid returns in the same 5-degree sector before that
+  # sector is sent to ArduPilot. This avoids aggressive native avoidance from
+  # one narrow reflection while still preserving real nearby obstacles.
+  min_points_per_sector: 3
 
 avoidance:
+  # Toggle this in code/config:
+  #   monitor_only      = scan, log, GCS status, no ArduPilot PRX avoidance
+  #   native_avoidance  = feed MAVLink proximity to ArduPilot simple avoidance
+  #   rc_toggle         = CH7 low: detect only, CH7 high: native avoidance
+  #   direct_velocity   = experimental Jetson velocity pulses; keep disabled
+  mode: "rc_toggle"
+  rc_toggle:
+    enable: true
+    channel: 7
+    engage_pwm: 1700
+    disengage_pwm: 1300
+    # RC7 low is detect-only: keep the PRX MAVLink stream alive so ArduPilot
+    # prearm sees PRX1 connected, but hold AVOID_ENABLE=0 until RC7 is high.
+    publish_proximity_while_disengaged: true
+    status_interval_sec: 10
+    beep_on_engage: true
+    engage_tune: "MFT220L16CEG"
+    beep_on_disengage: true
+    disengage_tune: "MFT180L16GC"
+  use_ardupilot_native_avoidance: true
+  configure_ardupilot_avoidance: true
+  disable_ardupilot_prx_when_native_disabled: false
+  disable_ardupilot_avoidance_when_native_disabled: true
+  send_obstacle_distance: true
+  send_distance_sensor_zones: false
+  native_publish_rate_hz: 10
+  native_detect_publish_rate_hz: 2
+  native_engaged_publish_rate_hz: 15
+  active_status_interval_sec: 15
+  # Read-only downlink from the legacy bridge so the LiDAR node can see RC7.
+  rc_downlink_udp_port: 14551
+  gcs_status_targets:
+    - "127.0.0.1:14550"
+    - "255.255.255.255:14550"
+    - "172.20.127.255:14550"
+    - "127.0.0.1:14551"
+    - "255.255.255.255:14551"
+    - "172.20.127.255:14551"
+  # LiDAR messages go directly to QGC UDP. Keeping them off the Cube serial
+  # link reduces MAVLink load while the bridge owns USB.
+  send_statustext_to_cube: false
+  enable_lua_obstacle_status: true
+  lua_obstacle_status_param: "SCR_USER4"
+  lua_obstacle_status_interval_sec: 15
+  keepout_status_interval_sec: 10
+  keepout_distance_m: 1.5
+  critical_distance_m: 0.5
+  beep_on_obstacle_under_keepout: true
+  beep_only_when_armed: true
+  startup_beep_grace_sec: 10.0
+  keepout_beep_interval_sec: 1.0
+  critical_beep_interval_sec: 0.5
+  speed_exponent: 0.55
+  angle_offset_deg: 0.0
+  prx1_type: 2
+  avoid_enable: 7
+  avoid_margin_m: 1.5
+  # RC7-high avoidance is intentionally firmer now: faster PRX updates and
+  # stronger FC backup response once avoidance is engaged.
+  avoid_backup_speed_mps: 0.7
+  avoid_accel_max_mpss: 2.0
+  distance_sensor_base_id: 40
   enable_avoidance_motion: false
   dry_run: true
   tick_rate_hz: 10
+  detect_tick_rate_hz: 5
+  engaged_tick_rate_hz: 15
   pulse_duration_ms: 100
   cooldown_ms: 100
   max_pitch_cmd: 0.12
   max_roll_cmd: 0.12
-  max_velocity_cmd_mps: 0.4
+  max_velocity_cmd_mps: 1.3
   require_vio_health: true
   require_ekf_health: true
-  allowed_modes: ["GUIDED", "LOITER", "POSHOLD"]
+  direct_allowed_modes: ["GUIDED"]

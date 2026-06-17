@@ -5,13 +5,15 @@
 #   flow. PosHold can use the no-GPS source set when flow/range health is good.
 
 import argparse
+import atexit
 import csv
+import ipaddress
 import math
 import os
 import socket
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +21,8 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 from pymavlink import mavutil
+
+STATUS_UDP_FORWARDER = None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -88,7 +92,13 @@ LUA_STATE_SOURCE_SET_ACTIVE = 50
 LUA_STATE_GPS_SOURCE_ACTIVE = 51
 LUA_STATE_NO_GPS_SOURCE_ACTIVE = 52
 LUA_STATE_GPS_LESS_FLIGHT_ACTIVE = 53
+LUA_STATE_POSHOLD_READY = 54
 LUA_STATE_MANUAL_ORIGIN = 60
+LUA_STATE_CALIBRATION_WAITING_ARM = 68
+LUA_STATE_CALIBRATION_WAITING_TAKEOFF = 69
+LUA_STATE_CALIBRATION_ACTIVE = 70
+LUA_STATE_CALIBRATION_COMPLETE_RTL = 71
+LUA_STATE_SLAM_FLIGHT_ACTIVE = 72
 LUA_STATE_CONFIG_FAILED = 80
 LUA_STATE_GPS_TIMEOUT = 81
 LUA_STATE_SOURCE_SWITCH_FAILED = 82
@@ -133,10 +143,13 @@ class MonitorState:
     global_position_int: Optional[object] = None
     scaled_pressure: Optional[object] = None
     raw_imu: Optional[object] = None
+    rc_channels: Optional[object] = None
+    vfr_hud: Optional[object] = None
     rangefinder_distance_m: float = -1.0
     rangefinder_last_seen_s: float = 0.0
     rangefinder_sensor_id: Optional[int] = None
     rangefinder_orientation: Optional[int] = None
+    selected_range_source: str = "none"
     flight_mode: str = "UNKNOWN"
     custom_mode: Optional[int] = None
     armed: bool = False
@@ -210,11 +223,30 @@ class MavlinkUdpForwarder:
     learned_targets: set
     vehicle_packets: int = 0
     qgc_packets: int = 0
+    status_packets: int = 0
     last_error: str = ""
+    status_history: list = field(default_factory=list)
+    last_qgc_packet_s: float = 0.0
+    last_status_replay_s: float = 0.0
+    qgc_reconnect_gap_s: float = 3.0
 
     @property
     def targets(self):
         return list(dict.fromkeys([*self.static_targets, *self.learned_targets]))
+
+    @staticmethod
+    def is_loopback_target(target) -> bool:
+        host = str(target[0])
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return host == "localhost"
+
+    def should_learn_target(self, target) -> bool:
+        # Local companion nodes also send MAVLink into the bridge. Do not learn
+        # them as QGC downlink targets, or the bridge echoes full vehicle
+        # telemetry back into onboard helper processes.
+        return not self.is_loopback_target(target)
 
     def forward_vehicle_message(self, msg):
         try:
@@ -235,6 +267,64 @@ class MavlinkUdpForwarder:
         if sent:
             self.vehicle_packets += 1
 
+    def _send_statustext_to_targets(
+        self,
+        text: str,
+        severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+        targets=None,
+    ) -> bool:
+        targets = self.targets if targets is None else list(targets)
+        if not targets:
+            return False
+        mav = mavutil.mavlink.MAVLink(None)
+        mav.srcSystem = 1
+        mav.srcComponent = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
+        payload_text = str(text)[:50].encode("utf-8", errors="ignore")
+        msg = mav.statustext_encode(severity, payload_text)
+        msg.pack(mav)
+        payload = bytes(msg.get_msgbuf())
+        sent = False
+        for target in targets:
+            try:
+                self.sock.sendto(payload, target)
+                sent = True
+            except OSError as exc:
+                self.last_error = f"UDP status send to {target[0]}:{target[1]} failed: {exc}"
+        return sent
+
+    def broadcast_statustext(
+        self,
+        text: str,
+        severity=mavutil.mavlink.MAV_SEVERITY_NOTICE,
+        remember: bool = True,
+    ):
+        if remember:
+            self.status_history.append((time.time(), str(text), severity))
+            self.status_history = self.status_history[-12:]
+        if self._send_statustext_to_targets(text, severity):
+            self.status_packets += 1
+
+    def replay_status_history(self, target):
+        if not self.status_history:
+            return
+        sent_any = self._send_statustext_to_targets(
+            "Telemetry restored: replaying bridge events",
+            mavutil.mavlink.MAV_SEVERITY_NOTICE,
+            targets=[target],
+        )
+        for _, text, severity in self.status_history[-8:]:
+            sent_any = (
+                self._send_statustext_to_targets(
+                    f"Replay: {text}",
+                    severity,
+                    targets=[target],
+                )
+                or sent_any
+            )
+        if sent_any:
+            self.status_packets += 1
+            self.last_status_replay_s = time.time()
+
     def drain_qgc_to_cube(self, master):
         while True:
             try:
@@ -247,13 +337,37 @@ class MavlinkUdpForwarder:
 
             if not payload:
                 continue
-            self.learned_targets.add((address[0], int(address[1])))
+            now_s = time.time()
+            target = (address[0], int(address[1]))
+            learn_target = self.should_learn_target(target)
+            new_target = learn_target and target not in self.learned_targets
+            reconnect = (
+                learn_target
+                and self.last_qgc_packet_s > 0.0
+                and now_s - self.last_qgc_packet_s >= self.qgc_reconnect_gap_s
+            )
+            if learn_target:
+                self.learned_targets.add(target)
             try:
                 master.write(payload)
                 self.qgc_packets += 1
+                if (
+                    learn_target
+                    and (new_target or reconnect)
+                    and now_s - self.last_status_replay_s >= 5.0
+                ):
+                    self.replay_status_history(target)
             except Exception as exc:
                 self.last_error = f"Cube serial write from QGC failed: {exc}"
-                break
+                try:
+                    master.close()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    "Cube USB MAVLink write failed while forwarding QGC uplink."
+                ) from exc
+            if learn_target:
+                self.last_qgc_packet_s = now_s
 
 
 FLOW_CSV_FIELDS = [
@@ -271,6 +385,7 @@ FLOW_CSV_FIELDS = [
     "gps_fallback",
     "distance_m",
     "range_source",
+    "selected_range_source",
     "range_age_s",
     "range_sensor_id",
     "range_orientation",
@@ -288,6 +403,7 @@ FLOW_CSV_FIELDS = [
     "flow_health",
     "flow_reason",
     "healthy_sends",
+    "healthy_flow_s",
     "bad_flow_s",
     "inertial_ok",
     "inertial_reason",
@@ -347,6 +463,8 @@ FLOW_CSV_FIELDS = [
     "gps_primary",
     "legacy_score",
     "legacy_best_score",
+    "legacy_ready_for_poshold",
+    "legacy_health_ok_s",
     "legacy_recommendation",
     "legacy_velocity_scale",
     "legacy_correction_confidence",
@@ -646,6 +764,15 @@ def parse_args():
         help="Disable the built-in MAVLink UDP pass-through for QGC.",
     )
     parser.add_argument(
+        "--disable-gcs-failsafe",
+        action="store_true",
+        help=(
+            "Set FS_GCS_ENABLE=0 at startup. Use this for RC-piloted field tests "
+            "where QGC/MK15 telemetry is situational awareness and must not trigger "
+            "a vehicle failsafe during short UDP/USB dropouts."
+        ),
+    )
+    parser.add_argument(
         "--crop-fraction",
         type=float,
         default=0.8,
@@ -859,11 +986,12 @@ def parse_args():
     )
     parser.add_argument(
         "--range-source",
-        choices=["external", "realsense", "none"],
+        choices=["external", "external_or_realsense", "realsense", "none"],
         default="external",
         help=(
             "Range scale for optical flow. Use 'external' for a Cube-connected "
-            "down-facing lidar, 'realsense' to send RealSense depth as "
+            "down-facing lidar, 'external_or_realsense' to fall back to RealSense "
+            "depth when lidar is stale, 'realsense' to send RealSense depth as "
             "DISTANCE_SENSOR, or 'none' for diagnostics only."
         ),
     )
@@ -1043,6 +1171,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--poshold-ready-min-health-seconds",
+        type=float,
+        default=3.0,
+        help=(
+            "Require this many continuous seconds of healthy flow/range before "
+            "switching POSHOLD onto the no-GPS source."
+        ),
+    )
+    parser.add_argument(
         "--disable-flow-failsafe",
         action="store_true",
         help=(
@@ -1069,6 +1206,15 @@ def parse_args():
         help=(
             "Minimum height for no-GPS optical-flow source use. Below this, the "
             "script stays on GPS because image motion is too large/noisy near the floor."
+        ),
+    )
+    parser.add_argument(
+        "--flow-failsafe-min-height-margin-m",
+        type=float,
+        default=0.05,
+        help=(
+            "Hysteresis margin below the minimum flow height. This prevents noisy "
+            "range data near the threshold from flipping 0.60m into 0.6m<0.6m."
         ),
     )
     parser.add_argument(
@@ -1167,6 +1313,15 @@ def parse_args():
     parser.add_argument("--legacy-min-quality-for-poshold", type=float, default=7.0)
     parser.add_argument("--legacy-weak-quality-threshold", type=float, default=5.0)
     parser.add_argument("--legacy-critical-quality-threshold", type=float, default=3.0)
+    parser.add_argument(
+        "--legacy-ready-min-health-s",
+        type=float,
+        default=8.0,
+        help=(
+            "LOITER observer must see this many continuous seconds of healthy "
+            "flow/range before it can announce No-GPS PosHold ready."
+        ),
+    )
     parser.add_argument(
         "--disable-legacy-live-soft-correction",
         action="store_true",
@@ -1373,12 +1528,38 @@ def external_range_is_fresh(monitor: MonitorState, args, now_s: float) -> bool:
 
 
 def selected_range_m(monitor: MonitorState, depth_frame, args, now_s: float) -> float:
+    monitor.selected_range_source = "none"
+    def realsense_range() -> float:
+        distance = median_distance_m(depth_frame, args.range_window)
+        return distance if distance > 0.0 else -1.0
+
     if args.range_source == "external":
         if external_range_is_fresh(monitor, args, now_s):
+            monitor.selected_range_source = "external"
             return monitor.rangefinder_distance_m
         return -1.0
+    if args.range_source == "external_or_realsense":
+        if external_range_is_fresh(monitor, args, now_s):
+            external_m = monitor.rangefinder_distance_m
+            if range_altitude_mismatch_reason(monitor, external_m, args) is None:
+                monitor.selected_range_source = "external"
+                return external_m
+            distance_m = realsense_range()
+            if distance_m > 0.0:
+                monitor.selected_range_source = "realsense_external_mismatch"
+                return distance_m
+            monitor.selected_range_source = "external_mismatch"
+            return external_m
+        distance_m = realsense_range()
+        if distance_m > 0.0:
+            monitor.selected_range_source = "realsense"
+            return distance_m
+        return -1.0
     if args.range_source == "realsense":
-        return median_distance_m(depth_frame, args.range_window)
+        distance_m = realsense_range()
+        if distance_m > 0.0:
+            monitor.selected_range_source = "realsense"
+        return distance_m
     return -1.0
 
 
@@ -1435,10 +1616,11 @@ def flow_health_ok(flow: FlowMeasurement, distance_m: float, monitor: MonitorSta
         critical = True
     elif (
         args.flow_failsafe_min_height_m > 0.0
-        and distance_m < args.flow_failsafe_min_height_m
+        and distance_m
+        < max(0.0, args.flow_failsafe_min_height_m - args.flow_failsafe_min_height_margin_m)
     ):
         reasons.append(
-            f"height {distance_m:.1f}m<{args.flow_failsafe_min_height_m:.1f}m"
+            f"height {distance_m:.2f}m<{args.flow_failsafe_min_height_m:.2f}m"
         )
     elif (
         args.flow_failsafe_max_height_m > 0.0
@@ -2073,12 +2255,25 @@ def is_vehicle_heartbeat(master, msg) -> bool:
     return autopilot != getattr(mavutil.mavlink, "MAV_AUTOPILOT_INVALID", 8)
 
 
+def close_master_safely(master) -> None:
+    try:
+        master.close()
+    except Exception:
+        pass
+
+
 def drain_messages(master, monitor: MonitorState, args, qgc_forwarder=None):
     now_s = time.time()
     if qgc_forwarder is not None:
         qgc_forwarder.drain_qgc_to_cube(master)
     while True:
-        msg = master.recv_match(blocking=False)
+        try:
+            msg = master.recv_match(blocking=False)
+        except Exception as exc:
+            close_master_safely(master)
+            raise RuntimeError(
+                "Cube USB MAVLink read failed while draining telemetry."
+            ) from exc
         if msg is None:
             break
 
@@ -2098,6 +2293,10 @@ def drain_messages(master, monitor: MonitorState, args, qgc_forwarder=None):
             monitor.scaled_pressure = msg
         elif msg_type == "RAW_IMU":
             monitor.raw_imu = msg
+        elif msg_type == "RC_CHANNELS":
+            monitor.rc_channels = msg
+        elif msg_type == "VFR_HUD":
+            monitor.vfr_hud = msg
         elif msg_type == "EKF_STATUS_REPORT":
             monitor.ekf_status = msg
             monitor.ekf_flags = msg.flags
@@ -2126,6 +2325,8 @@ def announce_status(
     also_print: bool = True,
 ):
     send_statustext(master, text, severity)
+    if STATUS_UDP_FORWARDER is not None:
+        STATUS_UDP_FORWARDER.broadcast_statustext(text, severity)
     if also_print:
         print(text)
 
@@ -2303,6 +2504,7 @@ def select_gps_primary(
 
 
 def main():
+    global STATUS_UDP_FORWARDER
     args = parse_args()
     if args.flow_health_test:
         args.external_nav_from_flow = False
@@ -2382,6 +2584,8 @@ def main():
         raise SystemExit("--flow-failsafe-min-tracks must be >= 0")
     if args.flow_failsafe_min_height_m < 0:
         raise SystemExit("--flow-failsafe-min-height-m must be >= 0")
+    if args.flow_failsafe_min_height_margin_m < 0:
+        raise SystemExit("--flow-failsafe-min-height-margin-m must be >= 0")
     if args.flow_failsafe_max_height_m < 0:
         raise SystemExit("--flow-failsafe-max-height-m must be >= 0")
     if (
@@ -2398,12 +2602,16 @@ def main():
         raise SystemExit("--flow-failsafe-land-seconds must be >= 0")
     if args.poshold_failsafe_bad_seconds <= 0:
         raise SystemExit("--poshold-failsafe-bad-seconds must be > 0")
+    if args.poshold_ready_min_health_seconds < 0:
+        raise SystemExit("--poshold-ready-min-health-seconds must be >= 0")
     if args.poshold_ekf_variance_max < 0:
         raise SystemExit("--poshold-ekf-variance-max must be >= 0")
     if args.imu_scan_seconds < 0:
         raise SystemExit("--imu-scan-seconds must be >= 0")
     if args.loiter_observer_interval <= 0:
         raise SystemExit("--loiter-observer-interval must be > 0")
+    if args.legacy_ready_min_health_s < 0:
+        raise SystemExit("--legacy-ready-min-health-s must be >= 0")
     if args.legacy_brake_duration_s <= 0:
         raise SystemExit("--legacy-brake-duration-s must be > 0")
     if args.legacy_brake_min_samples < 1:
@@ -2445,6 +2653,7 @@ def main():
         else mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
     )
     qgc_forwarder = create_qgc_udp_forwarder(args)
+    STATUS_UDP_FORWARDER = qgc_forwarder
     if qgc_forwarder is not None:
         static_targets = ", ".join(
             f"{host}:{port}" for host, port in qgc_forwarder.static_targets
@@ -2462,6 +2671,14 @@ def main():
         args.baud,
         source_component=source_component,
     )
+
+    def close_master_on_exit() -> None:
+        try:
+            master.close()
+        except Exception:
+            pass
+
+    atexit.register(close_master_on_exit)
     monitor = MonitorState()
     active_ekf_source_set: Optional[int] = None
     active_gps_primary: Optional[int] = None
@@ -2478,14 +2695,21 @@ def main():
         min_quality_for_poshold=args.legacy_min_quality_for_poshold,
         weak_quality_threshold=args.legacy_weak_quality_threshold,
         critical_quality_threshold=args.legacy_critical_quality_threshold,
+        min_ready_health_s=args.legacy_ready_min_health_s,
         live_correction_enabled=not args.disable_legacy_live_soft_correction,
         profile_path=args.legacy_profile_path,
+        direct_status_sender=(
+            qgc_forwarder.broadcast_statustext if qgc_forwarder is not None else None
+        ),
     )
     brake_calibrator = LegacyBrakeCalibrator(
         enabled=not args.disable_brake_calibration,
         duration_s=args.legacy_brake_duration_s,
         min_samples=args.legacy_brake_min_samples,
         profile_path=args.legacy_profile_path,
+        direct_status_sender=(
+            qgc_forwarder.broadcast_statustext if qgc_forwarder is not None else None
+        ),
     )
 
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED, 5)
@@ -2496,11 +2720,37 @@ def main():
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 5)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE, 10)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_RAW_IMU, 10)
-    if args.range_source == "external":
+    request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_RC_CHANNELS, 5)
+    request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, 5)
+    if args.range_source in ("external", "external_or_realsense"):
         distance_sensor_msg_id = getattr(mavutil.mavlink, "MAVLINK_MSG_ID_DISTANCE_SENSOR", 132)
         request_message_interval(master, distance_sensor_msg_id, 10)
     time.sleep(0.5)
     announce_status(master, JETSON_BOOT_STATUS)
+    if args.disable_gcs_failsafe:
+        try:
+            if set_parameter(master, "FS_GCS_ENABLE", 0.0):
+                announce_status(master, "GCS failsafe disabled; RC failsafe unchanged")
+            else:
+                announce_status(
+                    master,
+                    "GCS failsafe disable command not acknowledged",
+                    mavutil.mavlink.MAV_SEVERITY_WARNING,
+                )
+        except Exception as exc:
+            try:
+                announce_status(
+                    master,
+                    "Could not disable GCS failsafe",
+                    mavutil.mavlink.MAV_SEVERITY_WARNING,
+                )
+            except Exception:
+                if qgc_forwarder is not None:
+                    qgc_forwarder.broadcast_statustext(
+                        "Could not disable GCS failsafe",
+                        mavutil.mavlink.MAV_SEVERITY_WARNING,
+                    )
+            print(f"Could not disable FS_GCS_ENABLE: {exc}")
     if args.disable_external_imu:
         announce_status(master, "Legacy bridge external IMU disabled; using FC attitude")
     else:
@@ -2514,6 +2764,7 @@ def main():
                 mavutil.mavlink.MAV_SEVERITY_WARNING,
             )
     publish_lua_status(master, LUA_STATE_JETSON_BOOT, args.post_home_ekf_source_set)
+    announce_status(master, "BEEP: script init; 3 short")
     played_init_tune = play_tune(master, SCRIPT_INIT_TUNE)
     if played_init_tune:
         print("Played script-init beep sequence: 3 short beeps")
@@ -2596,20 +2847,20 @@ def main():
         request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 2)
         publish_lua_status(master, LUA_STATE_GPS_ASSIST_ACTIVE, args.post_home_ekf_source_set)
         announce_status(master, "GPS assist active, locking home position")
-        announce_status(master, "Trying to get home position from GPS", also_print=False)
+        announce_status(master, "GPS-DENIED WAIT: need GPS home/origin", also_print=False)
         if args.gps_home_timeout == 0:
             print(
                 "Origin/home not provided."
                 " Waiting indefinitely for GPS home lock before starting optical flow."
             )
-            announce_status(master, "Waiting for GPS home before flow start")
+            announce_status(master, "GPS-DENIED WAIT: need GPS home/origin")
         else:
             print(
                 "Origin/home not provided."
                 f" Waiting up to {args.gps_home_timeout:.0f}s for a one-time GPS lock"
                 " before starting optical flow."
             )
-            announce_status(master, "Waiting for GPS home before flow start")
+            announce_status(master, "GPS-DENIED WAIT: need GPS home/origin")
         gps_home = wait_for_gps_home(
             master,
             timeout_s=args.gps_home_timeout,
@@ -2622,6 +2873,11 @@ def main():
             ),
             idle_callback=(
                 lambda: qgc_forwarder.drain_qgc_to_cube(master)
+                if qgc_forwarder is not None
+                else None
+            ),
+            gcs_text_callback=(
+                qgc_forwarder.broadcast_statustext
                 if qgc_forwarder is not None
                 else None
             ),
@@ -2641,6 +2897,7 @@ def main():
             time.sleep(1.0)
             publish_lua_status(master, LUA_STATE_ORIGIN_LOCKED, args.post_home_ekf_source_set)
             announce_status(master, "Origin locked from GPS")
+            announce_status(master, "BEEP: GPS home locked")
             played_lock_tune = play_tune(master, GPS_HOME_LOCK_TUNE)
             announce_status(master, "Companion GPS requests disabled", also_print=False)
             announce_status(
@@ -2667,12 +2924,12 @@ def main():
             publish_lua_status(master, LUA_STATE_GPS_TIMEOUT, args.post_home_ekf_source_set)
             announce_status(
                 master,
-                "GPS home lock timeout",
+                "GPS-DENIED NOT READY: origin timeout",
                 mavutil.mavlink.MAV_SEVERITY_WARNING,
             )
             announce_status(
                 master,
-                "No-GPS flow waiting for origin",
+                "GPS-DENIED NOT READY: flow not started",
                 mavutil.mavlink.MAV_SEVERITY_WARNING,
                 also_print=False,
             )
@@ -2704,6 +2961,13 @@ def main():
             f" max={args.external_range_max_m:.1f}m"
             f" timeout={args.external_range_timeout:.1f}s"
         )
+    elif args.range_source == "external_or_realsense":
+        announce_status(master, "Using lidar range with RealSense fallback")
+        print(
+            "Range source: external DISTANCE_SENSOR first, RealSense depth fallback"
+            f" lidar_timeout={args.external_range_timeout:.1f}s"
+            f" realsense_max={args.max_depth_m:.1f}m"
+        )
     elif args.range_source == "realsense":
         announce_status(master, "Using RealSense depth for optical-flow range")
         print(
@@ -2716,6 +2980,7 @@ def main():
             "No range source: optical flow diagnostics only",
             mavutil.mavlink.MAV_SEVERITY_WARNING,
         )
+    announce_status(master, "BEEP: flow bridge started")
     played_start_tune = play_tune(master, SCRIPT_START_TUNE)
     if played_start_tune:
         print("Played script-start beep sequence: 2 short beeps")
@@ -2753,6 +3018,8 @@ def main():
     last_send_us: Optional[int] = None
     last_correction_state = "waiting"
     healthy_flow_sends = 0
+    healthy_flow_since: Optional[float] = None
+    healthy_flow_duration_s = 0.0
     last_flow_limited = False
     last_range_age_s = -1.0
     last_range_state = "unknown"
@@ -2768,6 +3035,10 @@ def main():
     poshold_failsafe_mode_sent = False
     next_source_switch_retry = 0.0
     next_gps_less_active_ping = 0.0
+    next_poshold_wait_message = 0.0
+    next_calibration_lua_ping = 0.0
+    last_calibration_lua_state = None
+    poshold_ready_announced = False
     flow_source_locked = False
     last_announced_mode = monitor.flight_mode
     last_armed_state = monitor.armed
@@ -3011,7 +3282,8 @@ def main():
             last_flow_limited = smoother.last_limited
             last_range_age_s = (
                 now - monitor.rangefinder_last_seen_s
-                if args.range_source == "external" and monitor.rangefinder_last_seen_s > 0.0
+                if args.range_source in ("external", "external_or_realsense")
+                and monitor.rangefinder_last_seen_s > 0.0
                 else -1.0
             )
             (
@@ -3076,6 +3348,19 @@ def main():
                 origin_lon_deg,
                 now,
             )
+            if (
+                bool(legacy_observer_summary.get("ready_for_poshold", False))
+                and not poshold_ready_announced
+            ):
+                publish_lua_status(master, LUA_STATE_POSHOLD_READY, args.post_home_ekf_source_set)
+                announce_status(
+                    master,
+                    (
+                        "NO-GPS POSHOLD gate ready:"
+                        f" q={float(legacy_observer_summary.get('score', 0.0)):.1f}/10"
+                    ),
+                )
+                poshold_ready_announced = True
             brake_calibrator.update(
                 master,
                 monitor,
@@ -3083,12 +3368,42 @@ def main():
                 loiter_observer,
                 now,
             )
+            calibration_lua_state = None
+            if monitor.flight_mode == "BRAKE":
+                if brake_calibrator.active:
+                    calibration_lua_state = LUA_STATE_CALIBRATION_ACTIVE
+                elif brake_calibrator.completed:
+                    calibration_lua_state = LUA_STATE_CALIBRATION_COMPLETE_RTL
+                elif monitor.armed:
+                    calibration_lua_state = LUA_STATE_CALIBRATION_WAITING_TAKEOFF
+                else:
+                    calibration_lua_state = LUA_STATE_CALIBRATION_WAITING_ARM
+            if calibration_lua_state is not None:
+                if (
+                    calibration_lua_state != last_calibration_lua_state
+                    or now >= next_calibration_lua_ping
+                ):
+                    publish_lua_status(
+                        master,
+                        calibration_lua_state,
+                        args.post_home_ekf_source_set,
+                    )
+                    next_calibration_lua_ping = now + 3.0
+                    last_calibration_lua_state = calibration_lua_state
+            else:
+                last_calibration_lua_state = None
+                next_calibration_lua_ping = now
             if current_flow_health_ok:
                 healthy_flow_sends += 1
+                if healthy_flow_since is None:
+                    healthy_flow_since = now
+                healthy_flow_duration_s = now - healthy_flow_since
                 bad_flow_since = None
                 bad_flow_duration_s = 0.0
             else:
                 healthy_flow_sends = 0
+                healthy_flow_since = None
+                healthy_flow_duration_s = 0.0
                 if bad_flow_since is None:
                     bad_flow_since = now
                 bad_flow_duration_s = now - bad_flow_since
@@ -3105,15 +3420,22 @@ def main():
                     )
                 last_flow_health_state = flow_health_state
 
-            if args.range_source == "external":
-                range_state = "healthy" if distance_m > 0.0 else "waiting"
+            if args.range_source in ("external", "external_or_realsense"):
+                selected_range_source = getattr(monitor, "selected_range_source", "none")
+                range_state = selected_range_source if distance_m > 0.0 else "waiting"
                 if range_state != last_range_state:
-                    if range_state == "healthy":
+                    if range_state == "external":
                         announce_status(master, "External lidar range healthy")
+                    elif range_state == "realsense":
+                        announce_status(
+                            master,
+                            "Lidar stale: using RealSense depth range",
+                            mavutil.mavlink.MAV_SEVERITY_WARNING,
+                        )
                     else:
                         announce_status(
                             master,
-                            "External lidar range waiting/stale",
+                            "Range waiting/stale",
                             mavutil.mavlink.MAV_SEVERITY_WARNING,
                         )
                     last_range_state = range_state
@@ -3156,10 +3478,18 @@ def main():
                 active_ekf_source_set == args.post_home_ekf_source_set
                 or flow_source_locked
             )
+            gps2_stream_selected = (
+                not args.gps_input_from_flow
+                or (
+                    flow_external_nav_state.last_sent
+                    and active_gps_primary == args.gps_input_id
+                )
+            )
             gps_less_poshold_active = (
                 monitor.flight_mode == "POSHOLD"
                 and using_flow_source
                 and not gps_fallback_active
+                and gps2_stream_selected
             )
             if gps_less_poshold_active and now >= next_gps_less_active_ping:
                 publish_lua_status(
@@ -3169,10 +3499,10 @@ def main():
                 )
                 announce_status(
                     master,
-                    "GPS-Less flight active",
+                    "GPS-DENIED ACTIVE: POSHOLD using flow GPS2",
                     mavutil.mavlink.MAV_SEVERITY_NOTICE,
                 )
-                next_gps_less_active_ping = now + 6.0
+                next_gps_less_active_ping = now + 10.0
             elif not gps_less_poshold_active:
                 next_gps_less_active_ping = now
             if monitor.flight_mode != "POSHOLD":
@@ -3304,7 +3634,34 @@ def main():
                         mavutil.mavlink.MAV_SEVERITY_CRITICAL,
                     )
 
-            if healthy_flow_sends >= args.ekf_source_switch_after_sends:
+            flow_ready_for_source_switch = (
+                healthy_flow_sends >= args.ekf_source_switch_after_sends
+                and healthy_flow_duration_s >= args.poshold_ready_min_health_seconds
+            )
+            if (
+                mode_source_switch_enabled
+                and monitor.flight_mode == "POSHOLD"
+                and desired_mode_source_set == args.post_home_ekf_source_set
+                and not flow_ready_for_source_switch
+                and now >= next_poshold_wait_message
+            ):
+                if current_flow_health_ok:
+                    announce_status(
+                        master,
+                        (
+                            "PosHold waiting for stable flow/range:"
+                            f" {healthy_flow_duration_s:.1f}/"
+                            f"{args.poshold_ready_min_health_seconds:.1f}s"
+                        ),
+                    )
+                else:
+                    announce_status(
+                        master,
+                        f"PosHold blocked: {flow_health_reason}",
+                        mavutil.mavlink.MAV_SEVERITY_WARNING,
+                    )
+                next_poshold_wait_message = now + 2.0
+            if flow_ready_for_source_switch:
                 if (
                     one_time_flow_source_switch_enabled
                     and not flow_source_locked
@@ -3425,6 +3782,7 @@ def main():
                             "gps_fallback": int(gps_fallback_active),
                             "distance_m": csv_value(last_distance_m),
                             "range_source": args.range_source,
+                            "selected_range_source": getattr(monitor, "selected_range_source", "none"),
                             "range_age_s": csv_value(last_range_age_s),
                             "range_sensor_id": (
                                 monitor.rangefinder_sensor_id
@@ -3450,6 +3808,7 @@ def main():
                             "flow_health": last_flow_health_state,
                             "flow_reason": last_flow_health_reason,
                             "healthy_sends": healthy_flow_sends,
+                            "healthy_flow_s": csv_value(healthy_flow_duration_s),
                             "bad_flow_s": csv_value(bad_flow_duration_s),
                             "inertial_ok": int(last_inertial_check.ok),
                             "inertial_reason": last_inertial_check.reason,
@@ -3695,6 +4054,12 @@ def main():
                             "gps_primary": active_gps_primary or 0,
                             "legacy_score": csv_value(legacy_observer_summary.get("score", 0.0)),
                             "legacy_best_score": csv_value(legacy_observer_summary.get("best_score", 0.0)),
+                            "legacy_ready_for_poshold": int(
+                                bool(legacy_observer_summary.get("ready_for_poshold", False))
+                            ),
+                            "legacy_health_ok_s": csv_value(
+                                legacy_observer_summary.get("health_ok_duration_s", 0.0)
+                            ),
                             "legacy_recommendation": legacy_observer_summary.get("recommendation", ""),
                             "legacy_velocity_scale": csv_value(loiter_observer.correction.velocity_scale),
                             "legacy_correction_confidence": csv_value(loiter_observer.correction.confidence),
@@ -3735,6 +4100,7 @@ def main():
                 summary = [
                     f"source={args.flow_source}",
                     f"range_source={args.range_source}",
+                    f"range_selected={getattr(monitor, 'selected_range_source', 'none')}",
                     f"distance={last_distance_m:.2f}m" if last_distance_m >= 0.0 else "distance=unknown",
                     f"raw_dpix=({last_raw_flow_dpix[0]:+d},{last_raw_flow_dpix[1]:+d})",
                     (
@@ -3757,6 +4123,7 @@ def main():
                     f"soft_scale={loiter_observer.correction.velocity_scale:.2f}",
                     f"soft_conf={loiter_observer.correction.confidence:.2f}",
                     f"ext_imu={'ok' if external_imu_sample is not None else 'missing'}",
+                    f"healthy_flow={healthy_flow_duration_s:.1f}s",
                     f"bad_flow={bad_flow_duration_s:.1f}s",
                     (
                         f"flow_gps=sent:{flow_external_nav_state.last_reason}"
@@ -3783,6 +4150,7 @@ def main():
                     (
                         f"qgc_udp=veh:{qgc_forwarder.vehicle_packets}"
                         f" qgc:{qgc_forwarder.qgc_packets}"
+                        f" txt:{qgc_forwarder.status_packets}"
                         if qgc_forwarder is not None
                         else "qgc_udp=off"
                     ),
@@ -3798,7 +4166,7 @@ def main():
                     f"pitch={pitch_deg:+.1f}deg",
                     f"speed_xy={speed_xy:.2f}m/s",
                 ]
-                if args.range_source == "external":
+                if args.range_source in ("external", "external_or_realsense"):
                     if last_range_age_s >= 0.0:
                         summary.append(f"range_age={last_range_age_s:.2f}s")
                     if monitor.rangefinder_sensor_id is not None:
@@ -3825,6 +4193,10 @@ def main():
                 external_imu_reader.close()
             except Exception:
                 pass
+        try:
+            master.close()
+        except Exception:
+            pass
         pipeline.stop()
 
 

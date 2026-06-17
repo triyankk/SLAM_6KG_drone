@@ -5,7 +5,7 @@ baud: 115200
 source: standby
 rate_hz: 15.0
 csv_path: ""
-boot_delay_seconds: 30.0
+boot_delay_seconds: 45.0
 fc_setup:
   enabled: true
   slam_source_set: 3
@@ -17,7 +17,7 @@ fc_setup:
   require_rangefinder_height: false
   ahrs_ekf_type: 3
   avoid_enable: 7
-  avoid_margin_m: 2.0
+  avoid_margin_m: 1.5
   ek2_enable: 0
   ek3_enable: 1
   ek3_src_options: 0
@@ -42,7 +42,7 @@ obstacle:
   lidar_enabled: true
   lidar_port: auto
   lidar_baud: 3000000
-  safety_distance_m: 2.0
+  safety_distance_m: 1.5
   publish_rate_hz: 5.0
   sensor_id: 20
   sector_count: 72
@@ -70,6 +70,32 @@ gps_input:
   vert_accuracy_m: 1.0
   speed_accuracy_m_s: 0.3
   update_rate_hz: 8.0
+external_pose:
+  # Optional SLAM sidecar input for Cartographer/OpenVINS/ROS pipelines.
+  # Send UDP JSON in local NED/FRD frame to use source: external_udp.
+  bind_host: 127.0.0.1
+  bind_port: 15560
+  max_age_s: 0.35
+  first_sample_timeout_s: 3.0
+gps_denied:
+  enabled: true
+  require_imu: true
+  require_rc_link: true
+  require_rangefinder: true
+  require_ekf_status: true
+  require_attitude: true
+  require_local_position: true
+  require_origin_for_gps_input: true
+  require_calibration_or_observer: true
+  stable_seconds: 3.0
+  max_pose_dt_s: 0.35
+  max_pose_jump_m: 1.25
+  max_velocity_m_s: 5.0
+  max_rangefinder_disagreement_m: 1.0
+  min_observer_score: 7.0
+  announce_interval_s: 10.0
+  status_write_interval_s: 1.0
+  status_path: logs/gps_denied_readiness.json
 lidar_steering:
   enabled: false
   trigger_distance_m: 2.0

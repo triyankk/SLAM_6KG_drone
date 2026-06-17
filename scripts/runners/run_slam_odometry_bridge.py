@@ -78,6 +78,7 @@ from slam_core.fc_config import (
     set_vehicle_mode,
     set_ekf_source_set,
 )
+from slam_core.gps_denied_readiness import GpsDeniedReadinessTracker
 from slam_core.lidar import LidarReader
 from slam_core.mavlink_bridge import connect_to_cube, send_odometry
 from slam_core.pose_sources import make_pose_source
@@ -200,7 +201,7 @@ def parse_args():
     parser.add_argument("--config", default="")
     parser.add_argument("--ports", nargs="+")
     parser.add_argument("--baud", type=int)
-    parser.add_argument("--source", choices=["standby", "hover", "circle", "csv", "vio"])
+    parser.add_argument("--source", choices=["standby", "hover", "circle", "csv", "vio", "external_udp", "slam_udp"])
     parser.add_argument("--csv-path", default=None)
     parser.add_argument("--rate-hz", type=float)
     parser.add_argument("--imu", choices=["on", "off"])
@@ -1454,6 +1455,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         lidar_reader = open_lidar_with_retry(config)
         qgc_bridge = open_qgc_bridge(config)
         loiter_observer = SlamLoiterObserver(config.slam_observer)
+        gps_denied_tracker = GpsDeniedReadinessTracker(config.gps_denied)
         send_companion_heartbeat(connection.master)
         now_s = time.time()
         if not jetson_start_announced_global:
@@ -1482,7 +1484,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         )
 
         try:
-            source = make_pose_source(config.source, config.csv_path)
+            source = make_pose_source(config.source, config.csv_path, config.external_pose)
         except Exception as exc:  # noqa: BLE001
             reason = f"VIO/camera unavailable: {exc}"
             print(reason)
@@ -1561,6 +1563,8 @@ def run_bridge(config: SlamBridgeConfig) -> None:
         gps_input_period_s = 1.0 / max(config.gps_input.update_rate_hz, 1.0)
         last_slam_pose_gps2_sent_s = 0.0
         last_no_gps_poshold_notice_s = 0.0
+        last_gps_denied_gate_notice_s = 0.0
+        last_gps_denied_gate_text = ""
         last_waiting_message_s = 0.0
         last_active_beep_s = 0.0
         last_slam_flight_ping_s = 0.0
@@ -1764,6 +1768,40 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                             gps_input_reference_announced = True
                         last_gps_input_s = now_s
 
+                gps_denied_report = gps_denied_tracker.update(
+                    stream_pose,
+                    latest_imu_sample,
+                    fc_state,
+                    gps_input_enabled=config.gps_input.enabled,
+                    gps_input_fixed_fix=config.gps_input.fixed_fix,
+                    gps_input_origin_valid=gps_input_origin_valid(config),
+                    target_mode=config.fc_setup.activate_mode,
+                    calibration_profile_valid=calibration_profile.valid,
+                    observer_summary=observer_summary,
+                    using_gps_input_bridge=using_gps_input_bridge(config),
+                    slam_pose_gps2_recent=now_s - last_slam_pose_gps2_sent_s <= 1.0,
+                    now_s=now_s,
+                )
+                gps_denied_tracker.maybe_write_status(gps_denied_report)
+                gps_denied_text = gps_denied_report.compact_message()
+                gps_denied_elapsed_s = now_s - last_gps_denied_gate_notice_s
+                if (
+                    last_gps_denied_gate_notice_s <= 0.0
+                    or gps_denied_elapsed_s >= max(config.gps_denied.announce_interval_s, 1.0)
+                    or (
+                        gps_denied_text != last_gps_denied_gate_text
+                        and gps_denied_elapsed_s >= 3.0
+                    )
+                ):
+                    severity = (
+                        mavutil.mavlink.MAV_SEVERITY_NOTICE
+                        if gps_denied_report.ready
+                        else mavutil.mavlink.MAV_SEVERITY_WARNING
+                    )
+                    send_gcs_event(connection.master, gps_denied_text, severity=severity)
+                    last_gps_denied_gate_notice_s = now_s
+                    last_gps_denied_gate_text = gps_denied_text
+
                 if fc_state.flight_mode != last_announced_mode:
                     message, severity = mode_event_message(
                         pose,
@@ -1908,6 +1946,7 @@ def run_bridge(config: SlamBridgeConfig) -> None:
                 if (
                     not ready_announced
                     and bridge_ready_for_poshold(pose, fc_state, config, calibration_profile, observer_summary)
+                    and gps_denied_report.ready
                 ):
                     if calibration_profile.valid:
                         ready_source = "Brake calibration profile"

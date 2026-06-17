@@ -1,4 +1,5 @@
 import os
+import math
 import select
 import statistics
 import termios
@@ -30,6 +31,9 @@ class PointSample:
     azimuth_deg: float
     distance_m: float
     reflectivity: int
+    vertical_deg: float
+    horizontal_distance_m: float
+    z_m: float
 
 
 @dataclass
@@ -45,6 +49,44 @@ class LidarSnapshot:
     max_distance_m: float = 0.0
     min_azimuth_deg: float = 0.0
     sector_distances_m: list[float] = field(default_factory=list)
+    sector_updated_s: list[float] = field(default_factory=list)
+
+    def fresh_sector_distances(self, max_age_s: float, now_s: float | None = None) -> list[float]:
+        """Return sector distances that have been refreshed recently.
+
+        JT16 packets arrive azimuth-by-azimuth. Keeping old sectors forever makes
+        a moved obstacle look permanent, so avoidance code should ask for a
+        freshness-filtered view before publishing to ArduPilot.
+        """
+        now = time.time() if now_s is None else now_s
+        max_age = max(max_age_s, 0.0)
+        distances: list[float] = []
+        for distance_m, updated_s in zip(self.sector_distances_m, self.sector_updated_s):
+            if distance_m > 0.0 and updated_s > 0.0 and now - updated_s <= max_age:
+                distances.append(distance_m)
+            else:
+                distances.append(0.0)
+        return distances
+
+
+APPROX_VERTICAL_ANGLES_DEG = (
+    -15.0,
+    -13.0,
+    -11.0,
+    -9.0,
+    -7.0,
+    -5.0,
+    -3.0,
+    -1.0,
+    1.0,
+    3.0,
+    5.0,
+    7.0,
+    9.0,
+    11.0,
+    13.0,
+    15.0,
+)
 
 
 def find_lidar_port() -> str | None:
@@ -105,7 +147,19 @@ def extract_point_samples(packet: bytes) -> list[PointSample]:
         distance_raw = int.from_bytes(packet[offset : offset + 2], "little")
         reflectivity = packet[offset + 2]
         distance_m = distance_raw * 0.004
-        samples.append(PointSample(channel, azimuth_deg, distance_m, reflectivity))
+        vertical_deg = APPROX_VERTICAL_ANGLES_DEG[min(channel, len(APPROX_VERTICAL_ANGLES_DEG) - 1)]
+        vertical_rad = math.radians(vertical_deg)
+        samples.append(
+            PointSample(
+                channel=channel,
+                azimuth_deg=azimuth_deg,
+                distance_m=distance_m,
+                reflectivity=reflectivity,
+                vertical_deg=vertical_deg,
+                horizontal_distance_m=distance_m * math.cos(vertical_rad),
+                z_m=distance_m * math.sin(vertical_rad),
+            )
+        )
     return samples
 
 
@@ -162,18 +216,21 @@ class LidarReader:
         filter_samples: int = 15,
         min_valid_distance_m: float = 0.15,
         max_valid_distance_m: float = 40.0,
+        min_points_per_sector: int = 1,
     ):
         self.port = choose_lidar_port(port)
         self.baud = baud
         self.sector_count = sector_count
         self.min_valid_distance_m = min_valid_distance_m
         self.max_valid_distance_m = max_valid_distance_m
+        self.min_points_per_sector = max(1, int(min_points_per_sector))
         self.recent_packet_distances_m = deque(maxlen=max(1, filter_samples))
         self.fd = open_raw_lidar(self.port, self.baud)
         self.buffer = bytearray()
         self.snapshot = LidarSnapshot(
             timestamp_s=time.time(),
             sector_distances_m=[0.0] * self.sector_count,
+            sector_updated_s=[0.0] * self.sector_count,
         )
 
     @classmethod
@@ -185,8 +242,17 @@ class LidarReader:
         filter_samples: int = 15,
         min_valid_distance_m: float = 0.15,
         max_valid_distance_m: float = 40.0,
+        min_points_per_sector: int = 1,
     ) -> "LidarReader":
-        return cls(port, baud, sector_count, filter_samples, min_valid_distance_m, max_valid_distance_m)
+        return cls(
+            port,
+            baud,
+            sector_count,
+            filter_samples,
+            min_valid_distance_m,
+            max_valid_distance_m,
+            min_points_per_sector,
+        )
 
     def close(self) -> None:
         if self.fd is not None:
@@ -216,10 +282,15 @@ class LidarReader:
                 return self.snapshot
 
     def _on_point_packet(self, packet: bytes) -> None:
+        if len(self.snapshot.sector_distances_m) != self.sector_count:
+            self.snapshot.sector_distances_m = [0.0] * self.sector_count
+        if len(self.snapshot.sector_updated_s) != self.sector_count:
+            self.snapshot.sector_updated_s = [0.0] * self.sector_count
+
         samples = [
             sample
             for sample in extract_point_samples(packet)
-            if self.min_valid_distance_m <= sample.distance_m <= self.max_valid_distance_m
+            if self.min_valid_distance_m <= sample.horizontal_distance_m <= self.max_valid_distance_m
         ]
         self.snapshot.point_packets += 1
         self.snapshot.timestamp_s = time.time()
@@ -227,7 +298,7 @@ class LidarReader:
             return
 
         distances = [sample.distance_m for sample in samples]
-        nearest = min(samples, key=lambda sample: sample.distance_m)
+        nearest = min(samples, key=lambda sample: sample.horizontal_distance_m)
         robust_packet_distance_m = sorted(distances)[min(2, len(distances) - 1)]
         self.recent_packet_distances_m.append(robust_packet_distance_m)
         self.snapshot.min_distance_m = nearest.distance_m
@@ -236,12 +307,20 @@ class LidarReader:
         self.snapshot.max_distance_m = max(distances)
         self.snapshot.min_azimuth_deg = nearest.azimuth_deg
 
+        packet_sector_distances: dict[int, list[float]] = {}
         for sample in samples:
             sector = int((sample.azimuth_deg % 360.0) / 360.0 * self.sector_count)
             sector = max(0, min(self.sector_count - 1, sector))
-            current = self.snapshot.sector_distances_m[sector]
-            if current <= 0.0 or sample.distance_m < current:
-                self.snapshot.sector_distances_m[sector] = sample.distance_m
+            packet_sector_distances.setdefault(sector, []).append(sample.horizontal_distance_m)
+
+        min_points = max(1, getattr(self, "min_points_per_sector", 1))
+        for sector, distances_m in packet_sector_distances.items():
+            if len(distances_m) < min_points:
+                continue
+            sorted_distances = sorted(distances_m)
+            distance_m = sorted_distances[min(min_points - 1, len(sorted_distances) - 1)]
+            self.snapshot.sector_distances_m[sector] = distance_m
+            self.snapshot.sector_updated_s[sector] = self.snapshot.timestamp_s
 
     def _on_imu_packet(self) -> None:
         self.snapshot.imu_packets += 1

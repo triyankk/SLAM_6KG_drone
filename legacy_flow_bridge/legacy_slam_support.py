@@ -21,6 +21,30 @@ from pymavlink import mavutil
 GPS_EPOCH_UNIX_S = 315964800
 GPS_UTC_LEAP_SECONDS = 18
 REPO_ROOT = Path(__file__).resolve().parents[1]
+STATUSTEXT_LIMIT = 50
+
+
+def send_gcs(master, text: str, severity=mavutil.mavlink.MAV_SEVERITY_NOTICE, direct_sender=None) -> None:
+    """Send compact GCS text that survives MAVLink STATUSTEXT truncation."""
+    payload = f"LGC {text}"[:STATUSTEXT_LIMIT]
+    try:
+        master.mav.statustext_send(severity, payload.encode("utf-8"))
+    except Exception:
+        pass
+    if direct_sender is not None:
+        try:
+            direct_sender(payload, severity)
+        except Exception:
+            pass
+    print(f"LEGACY SLAM: {text}")
+
+
+def wrap_angle_deg(angle_deg: float) -> float:
+    while angle_deg > 180.0:
+        angle_deg -= 360.0
+    while angle_deg < -180.0:
+        angle_deg += 360.0
+    return angle_deg
 
 
 @dataclass
@@ -143,8 +167,10 @@ class LegacyLoiterObserver:
         min_quality_for_poshold: float,
         weak_quality_threshold: float,
         critical_quality_threshold: float,
+        min_ready_health_s: float,
         live_correction_enabled: bool,
         profile_path: str,
+        direct_status_sender=None,
     ):
         self.enabled = enabled
         self.log_path = resolve_repo_path(log_path)
@@ -152,12 +178,16 @@ class LegacyLoiterObserver:
         self.min_quality_for_poshold = min_quality_for_poshold
         self.weak_quality_threshold = weak_quality_threshold
         self.critical_quality_threshold = critical_quality_threshold
+        self.min_ready_health_s = max(0.0, min_ready_health_s)
         self.last_message_s = 0.0
         self.last_score_message_s = 0.0
         self.last_score = 0.0
         self.active = False
         self.best_score = 0.0
+        self.health_started_s: Optional[float] = None
+        self.health_ok_duration_s = 0.0
         self.correction = LegacySoftCorrection(enabled=live_correction_enabled)
+        self.direct_status_sender = direct_status_sender
         self.profile_path = resolve_repo_path(profile_path)
         self._load_profile()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,11 +239,12 @@ class LegacyLoiterObserver:
         if in_loiter and not self.active:
             self.active = True
             self.last_message_s = 0.0
-            self._announce(master, "LOITER active: legacy SLAM observation mode started.")
+            self._announce(master, "OBS ON: LOITER learning")
         elif not in_loiter and self.active:
             self.active = False
-            self._announce(master, "LOITER observation paused; legacy bridge normal mode monitoring.")
+            self._announce(master, "OBS PAUSE: mode changed")
 
+        self._update_health_streak(in_loiter, flow_health_ok, now_s)
         metrics = self._score(
             monitor,
             flow_state,
@@ -226,21 +257,48 @@ class LegacyLoiterObserver:
         )
         score = metrics["score"]
         self.best_score = max(self.best_score, score)
+        ready_for_poshold = (
+            score >= self.min_quality_for_poshold
+            and flow_health_ok
+            and self.health_ok_duration_s >= self.min_ready_health_s
+        )
 
         if in_loiter:
             self._learn_from_loiter(monitor, flow_state, flow_health_ok)
             if now_s - self.last_message_s >= self.message_interval_s:
-                self._announce(master, "SLAM observing LOITER data for soft calibration.")
-                self._announce(master, self._score_message(score))
+                self._announce(master, self._score_message(score, ready_for_poshold))
                 self.last_message_s = now_s
             if abs(score - self.last_score) >= 0.5 and now_s - self.last_score_message_s >= 5.0:
-                self._announce(master, self._score_message(score))
+                self._announce(master, self._score_message(score, ready_for_poshold))
                 self.last_score_message_s = now_s
                 self.last_score = score
-            self._log(metrics, monitor, flow_state, flow_health_reason, imu_sample, now_s)
+            self._log(
+                metrics,
+                monitor,
+                flow_state,
+                flow_health_ok,
+                flow_health_reason,
+                imu_sample,
+                now_s,
+            )
 
-        recommendation = self._recommendation(score)
-        return {"score": score, "recommendation": recommendation, "best_score": self.best_score}
+        recommendation = self._recommendation(score, ready_for_poshold)
+        return {
+            "score": score,
+            "recommendation": recommendation,
+            "best_score": self.best_score,
+            "ready_for_poshold": ready_for_poshold,
+            "health_ok_duration_s": self.health_ok_duration_s,
+        }
+
+    def _update_health_streak(self, in_loiter: bool, flow_health_ok: bool, now_s: float) -> None:
+        if not in_loiter or not flow_health_ok:
+            self.health_started_s = None
+            self.health_ok_duration_s = 0.0
+            return
+        if self.health_started_s is None:
+            self.health_started_s = now_s
+        self.health_ok_duration_s = max(0.0, now_s - self.health_started_s)
 
     def _learn_from_loiter(self, monitor, flow_state, flow_health_ok: bool) -> None:
         if not flow_health_ok:
@@ -306,6 +364,9 @@ class LegacyLoiterObserver:
             elif max(variances) < 0.8:
                 score += 0.5
 
+        if not flow_health_ok:
+            score = min(score, self.weak_quality_threshold - 0.1)
+
         score = max(0.0, min(10.0, score))
         return {
             "score": score,
@@ -313,34 +374,55 @@ class LegacyLoiterObserver:
             "velocity_drift_m_s": velocity_drift_m_s,
             "velocity_scale": self.correction.velocity_scale,
             "correction_confidence": self.correction.confidence,
+            "health_ok_duration_s": self.health_ok_duration_s,
         }
 
-    def _recommendation(self, score: float) -> str:
-        if score >= self.min_quality_for_poshold:
+    def _recommendation(self, score: float, ready_for_poshold: bool) -> str:
+        if ready_for_poshold:
             return f"ready for No-GPS PosHold: {score:.1f}/10"
+        if score >= self.min_quality_for_poshold:
+            return (
+                "not ready: waiting for stable flow/range "
+                f"{self.health_ok_duration_s:.1f}/{self.min_ready_health_s:.1f}s"
+            )
         if score < self.critical_quality_threshold:
             return f"critical: fallback to LOITER recommended: {score:.1f}/10"
         if score < self.weak_quality_threshold:
             return f"weak: use LOITER longer or Brake calibration: {score:.1f}/10"
         return f"usable but needs more observation: {score:.1f}/10"
 
-    def _score_message(self, score: float) -> str:
+    def _score_message(self, score: float, ready_for_poshold: bool) -> str:
+        if ready_for_poshold:
+            return f"OBS READY q={score:.1f} stable={self.health_ok_duration_s:.0f}s"
         if score >= self.min_quality_for_poshold:
-            return f"SLAM quality ready for No-GPS PosHold: {score:.1f}/10"
+            return (
+                f"OBS WAIT q={score:.1f} stable "
+                f"{self.health_ok_duration_s:.0f}/{self.min_ready_health_s:.0f}s"
+            )
         if score < self.critical_quality_threshold:
-            return f"SLAM quality critical: {score:.1f}/10. Fallback to LOITER recommended."
+            return f"OBS CRIT q={score:.1f}; use LOITER"
         if score < self.weak_quality_threshold:
-            return f"SLAM quality weak: {score:.1f}/10. Use LOITER longer or run calibration."
-        return f"SLAM quality improving: {score:.1f}/10"
+            return f"OBS WEAK q={score:.1f}; run BRAKE cal"
+        return f"OBS q={score:.1f}; keep LOITER"
 
     def _announce(self, master, text: str, severity=mavutil.mavlink.MAV_SEVERITY_NOTICE) -> None:
-        try:
-            master.mav.statustext_send(severity, f"LEGACY SLAM: {text}"[:50].encode("utf-8"))
-        except Exception:
-            pass
-        print(f"LEGACY SLAM: {text}")
+        send_gcs(master, text, severity, self.direct_status_sender)
 
-    def _log(self, metrics, monitor, flow_state, flow_health_reason: str, imu_sample, now_s: float) -> None:
+    def _log(
+        self,
+        metrics,
+        monitor,
+        flow_state,
+        flow_health_ok: bool,
+        flow_health_reason: str,
+        imu_sample,
+        now_s: float,
+    ) -> None:
+        ready_for_poshold = (
+            metrics["score"] >= self.min_quality_for_poshold
+            and flow_health_ok
+            and self.health_ok_duration_s >= self.min_ready_health_s
+        )
         payload = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_s)),
             "mode": getattr(monitor, "flight_mode", "UNKNOWN"),
@@ -351,32 +433,62 @@ class LegacyLoiterObserver:
             "flow_e_m": flow_state.east_m,
             "flow_vn_m_s": flow_state.last_vn_m_s,
             "flow_ve_m_s": flow_state.last_ve_m_s,
+            "flow_health_ok": bool(flow_health_ok),
             "flow_reason": flow_health_reason,
             "imu": "present" if imu_sample is not None else "missing",
             **metrics,
-            "recommendation": self._recommendation(metrics["score"]),
+            "recommendation": self._recommendation(metrics["score"], ready_for_poshold),
         }
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 class LegacyBrakeCalibrator:
+    PHASES = (
+        ("HOLD", "hold steady"),
+        ("ROLL", "pilot roll L/R"),
+        ("PITCH", "pilot pitch F/B"),
+        ("YAW", "pilot yaw L/R"),
+        ("THR", "pilot climb/desc"),
+        ("SAVE", "saving profile"),
+    )
+
     def __init__(
         self,
         enabled: bool,
         duration_s: float,
         min_samples: int,
         profile_path: str,
+        direct_status_sender=None,
     ):
         self.enabled = enabled
-        self.duration_s = max(duration_s, 3.0)
+        self.duration_s = max(duration_s, 12.0)
         self.min_samples = max(min_samples, 10)
         self.profile_path = resolve_repo_path(profile_path)
         self.active = False
         self.start_s = 0.0
+        self.phase_started_s = 0.0
+        self.phase_index = 0
         self.samples = 0
         self.completed = False
-        self.last_collect_message_s = 0.0
+        self.last_phase_message_s = 0.0
+        self.last_progress_bucket = -1
+        self.phase_goal_s = max(3.0, self.duration_s / max(len(self.PHASES) - 1, 1))
+        self.phase_timeout_s = max(8.0, self.phase_goal_s * 2.0)
+        self.roll_pos = False
+        self.roll_neg = False
+        self.pitch_pos = False
+        self.pitch_neg = False
+        self.yaw_base_deg: Optional[float] = None
+        self.yaw_min_delta_deg = 0.0
+        self.yaw_max_delta_deg = 0.0
+        self.throttle_min: Optional[float] = None
+        self.throttle_max: Optional[float] = None
+        self.alt_min_m: Optional[float] = None
+        self.alt_max_m: Optional[float] = None
+        self.flow_bad_samples = 0
+        self.direct_status_sender = direct_status_sender
+        self.last_wait_message_s = 0.0
 
     def update(
         self,
@@ -389,41 +501,258 @@ class LegacyBrakeCalibrator:
         if not self.enabled:
             return
         in_brake = str(getattr(monitor, "flight_mode", "")).upper() == "BRAKE"
+        armed = bool(getattr(monitor, "armed", False))
+        if in_brake and not armed:
+            if self.active:
+                self._announce(master, "CAL PAUSED: vehicle disarmed")
+            self.active = False
+            self.completed = False
+            if now_s - self.last_wait_message_s >= 5.0:
+                self._announce(master, "CAL WAIT ARM: fly, then select BRAKE")
+                self.last_wait_message_s = now_s
+            return
         if in_brake and not self.active and not self.completed:
-            self.active = True
-            self.start_s = now_s
-            self.samples = 0
-            self.last_collect_message_s = 0.0
-            self._announce(master, "BRAKE selected: legacy flow calibration started.")
+            self._start(master, monitor, now_s)
         if not in_brake:
             if self.active:
-                self._announce(master, "BRAKE calibration paused; mode changed.")
+                self._announce(master, "CAL PAUSED: mode changed")
             self.active = False
             self.completed = False
             return
         if not self.active:
             return
+
+        self._observe(monitor, flow_health_ok)
         if flow_health_ok:
             self.samples += 1
+        else:
+            self.flow_bad_samples += 1
+
         elapsed_s = now_s - self.start_s
-        if elapsed_s >= self.duration_s and self.samples >= self.min_samples:
+        phase_elapsed_s = now_s - self.phase_started_s
+        progress_pct = self._progress_pct(phase_elapsed_s)
+        score = self._calibration_score()
+        self._maybe_announce_progress(master, progress_pct, score, phase_elapsed_s, now_s)
+
+        if self._current_phase_complete(phase_elapsed_s):
+            self._advance_phase(master, now_s)
+
+        if self.phase_index >= len(self.PHASES) - 1 and self.samples >= self.min_samples:
             observer.save_profile()
             self._write_profile(observer)
             self.completed = True
             self.active = False
             self._announce(
                 master,
-                f"BRAKE calibration complete: scale={observer.correction.velocity_scale:.2f} confidence={observer.correction.confidence:.2f}.",
+                (
+                    f"CAL DONE 100% score={score:.1f}"
+                    f" scale={observer.correction.velocity_scale:.2f}"
+                ),
             )
-        elif self.samples > 0 and now_s - self.last_collect_message_s >= 10.0:
-            self._announce(master, f"BRAKE calibration collecting: {self.samples} samples.")
-            self.last_collect_message_s = now_s
+        elif self.phase_index >= len(self.PHASES) - 1 and now_s - self.last_phase_message_s >= 3.0:
+            self._announce(master, f"CAL 95% need samples {self.samples}/{self.min_samples}")
+            self.last_phase_message_s = now_s
+
+    def _start(self, master, monitor, now_s: float) -> None:
+        self.active = True
+        self.start_s = now_s
+        self.phase_started_s = now_s
+        self.phase_index = 0
+        self.samples = 0
+        self.flow_bad_samples = 0
+        self.completed = False
+        self.last_phase_message_s = 0.0
+        self.last_progress_bucket = -1
+        self.last_wait_message_s = 0.0
+        self.roll_pos = False
+        self.roll_neg = False
+        self.pitch_pos = False
+        self.pitch_neg = False
+        self.yaw_base_deg = self._yaw_deg(monitor)
+        self.yaw_min_delta_deg = 0.0
+        self.yaw_max_delta_deg = 0.0
+        self.throttle_min = None
+        self.throttle_max = None
+        self.alt_min_m = None
+        self.alt_max_m = None
+        self._announce(master, "CAL START: BRAKE manual")
+        self._announce(master, "CAL 0% HOLD: keep steady")
+
+    def _observe(self, monitor, flow_health_ok: bool) -> None:
+        attitude = getattr(monitor, "attitude", None)
+        if attitude is not None:
+            roll_deg = math.degrees(float(getattr(attitude, "roll", 0.0) or 0.0))
+            pitch_deg = math.degrees(float(getattr(attitude, "pitch", 0.0) or 0.0))
+            if roll_deg >= 4.0:
+                self.roll_pos = True
+            if roll_deg <= -4.0:
+                self.roll_neg = True
+            if pitch_deg >= 4.0:
+                self.pitch_pos = True
+            if pitch_deg <= -4.0:
+                self.pitch_neg = True
+            yaw_deg = math.degrees(float(getattr(attitude, "yaw", 0.0) or 0.0))
+            if self.yaw_base_deg is None:
+                self.yaw_base_deg = yaw_deg
+            yaw_delta = wrap_angle_deg(yaw_deg - self.yaw_base_deg)
+            self.yaw_min_delta_deg = min(self.yaw_min_delta_deg, yaw_delta)
+            self.yaw_max_delta_deg = max(self.yaw_max_delta_deg, yaw_delta)
+
+        throttle = self._throttle_value(monitor)
+        if throttle is not None:
+            self.throttle_min = throttle if self.throttle_min is None else min(self.throttle_min, throttle)
+            self.throttle_max = throttle if self.throttle_max is None else max(self.throttle_max, throttle)
+
+        altitude_m = self._altitude_m(monitor)
+        if altitude_m is not None:
+            self.alt_min_m = altitude_m if self.alt_min_m is None else min(self.alt_min_m, altitude_m)
+            self.alt_max_m = altitude_m if self.alt_max_m is None else max(self.alt_max_m, altitude_m)
+
+    def _current_phase_complete(self, phase_elapsed_s: float) -> bool:
+        phase, _hint = self.PHASES[self.phase_index]
+        if phase == "HOLD":
+            return phase_elapsed_s >= min(4.0, self.phase_goal_s) and self.samples >= 5
+        if phase == "ROLL":
+            return (self.roll_pos and self.roll_neg) or phase_elapsed_s >= self.phase_timeout_s
+        if phase == "PITCH":
+            return (self.pitch_pos and self.pitch_neg) or phase_elapsed_s >= self.phase_timeout_s
+        if phase == "YAW":
+            return self._yaw_span_deg() >= 12.0 or phase_elapsed_s >= self.phase_timeout_s
+        if phase == "THR":
+            return self._throttle_span() >= 80.0 or self._alt_span_m() >= 0.25 or phase_elapsed_s >= self.phase_timeout_s
+        return False
+
+    def _advance_phase(self, master, now_s: float) -> None:
+        phase, _hint = self.PHASES[self.phase_index]
+        if phase in ("ROLL", "PITCH", "YAW", "THR") and not self._phase_observed(phase):
+            self._announce(master, f"CAL {self._progress_pct(0):.0f}% {phase} weak; continuing")
+        self.phase_index = min(self.phase_index + 1, len(self.PHASES) - 1)
+        self.phase_started_s = now_s
+        self.last_phase_message_s = 0.0
+        self.last_progress_bucket = -1
+        next_phase, hint = self.PHASES[self.phase_index]
+        if next_phase != "SAVE":
+            self._announce(master, f"CAL {self._progress_pct(0):.0f}% {next_phase}: {hint}")
+
+    def _maybe_announce_progress(
+        self,
+        master,
+        progress_pct: int,
+        score: float,
+        phase_elapsed_s: float,
+        now_s: float,
+    ) -> None:
+        bucket = int(progress_pct // 10) * 10
+        if bucket <= self.last_progress_bucket and now_s - self.last_phase_message_s < 3.0:
+            return
+        phase, hint = self.PHASES[self.phase_index]
+        status = self._phase_status(phase)
+        if phase_elapsed_s > self.phase_goal_s and not self._phase_observed(phase):
+            status = hint
+        self._announce(master, f"CAL {progress_pct}% {phase}: {status} q={score:.1f}")
+        self.last_progress_bucket = max(self.last_progress_bucket, bucket)
+        self.last_phase_message_s = now_s
+
+    def _progress_pct(self, phase_elapsed_s: float) -> int:
+        if self.phase_index >= len(self.PHASES) - 1:
+            return 95
+        phase_fraction = min(1.0, phase_elapsed_s / max(self.phase_goal_s, 1e-3))
+        raw = (self.phase_index + phase_fraction) / max(len(self.PHASES) - 1, 1)
+        return max(0, min(95, int(round(raw * 95.0))))
+
+    def _phase_observed(self, phase: str) -> bool:
+        if phase == "HOLD":
+            return self.samples >= 5
+        if phase == "ROLL":
+            return self.roll_pos and self.roll_neg
+        if phase == "PITCH":
+            return self.pitch_pos and self.pitch_neg
+        if phase == "YAW":
+            return self._yaw_span_deg() >= 12.0
+        if phase == "THR":
+            return self._throttle_span() >= 80.0 or self._alt_span_m() >= 0.25
+        return True
+
+    def _phase_status(self, phase: str) -> str:
+        if phase == "HOLD":
+            return f"samples {self.samples}/{self.min_samples}"
+        if phase == "ROLL":
+            return f"L={'Y' if self.roll_neg else 'n'} R={'Y' if self.roll_pos else 'n'}"
+        if phase == "PITCH":
+            return f"F={'Y' if self.pitch_neg else 'n'} B={'Y' if self.pitch_pos else 'n'}"
+        if phase == "YAW":
+            return f"span {self._yaw_span_deg():.0f}deg"
+        if phase == "THR":
+            return f"thr {self._throttle_span():.0f} alt {self._alt_span_m():.1f}m"
+        return "saving"
+
+    def _calibration_score(self) -> float:
+        phase_points = sum(1 for phase, _hint in self.PHASES[:-1] if self._phase_observed(phase))
+        phase_score = phase_points / max(len(self.PHASES) - 1, 1)
+        sample_score = min(1.0, self.samples / max(float(self.min_samples), 1.0))
+        flow_penalty = min(0.3, self.flow_bad_samples / max(float(self.samples + self.flow_bad_samples), 1.0))
+        return max(0.0, min(10.0, 10.0 * (0.65 * phase_score + 0.35 * sample_score - flow_penalty)))
+
+    def _yaw_deg(self, monitor) -> Optional[float]:
+        attitude = getattr(monitor, "attitude", None)
+        if attitude is None:
+            return None
+        return math.degrees(float(getattr(attitude, "yaw", 0.0) or 0.0))
+
+    def _yaw_span_deg(self) -> float:
+        return max(0.0, self.yaw_max_delta_deg - self.yaw_min_delta_deg)
+
+    def _throttle_value(self, monitor) -> Optional[float]:
+        rc = getattr(monitor, "rc_channels", None)
+        if rc is not None:
+            value = getattr(rc, "chan3_raw", None)
+            if value not in (None, 0):
+                return float(value)
+        vfr = getattr(monitor, "vfr_hud", None)
+        if vfr is not None:
+            value = getattr(vfr, "throttle", None)
+            if value is not None:
+                return float(value)
+        return None
+
+    def _throttle_span(self) -> float:
+        if self.throttle_min is None or self.throttle_max is None:
+            return 0.0
+        return max(0.0, self.throttle_max - self.throttle_min)
+
+    def _altitude_m(self, monitor) -> Optional[float]:
+        local = getattr(monitor, "local_position", None)
+        if local is not None:
+            try:
+                return -float(getattr(local, "z"))
+            except (TypeError, ValueError):
+                pass
+        gpos = getattr(monitor, "global_position_int", None)
+        if gpos is not None:
+            rel_alt_mm = getattr(gpos, "relative_alt", None)
+            if rel_alt_mm is not None:
+                return float(rel_alt_mm) / 1000.0
+        return None
+
+    def _alt_span_m(self) -> float:
+        if self.alt_min_m is None or self.alt_max_m is None:
+            return 0.0
+        return max(0.0, self.alt_max_m - self.alt_min_m)
 
     def _write_profile(self, observer: LegacyLoiterObserver) -> None:
         self.profile_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "samples": self.samples,
+            "calibration_score": self._calibration_score(),
+            "roll_left_seen": self.roll_neg,
+            "roll_right_seen": self.roll_pos,
+            "pitch_forward_seen": self.pitch_neg,
+            "pitch_back_seen": self.pitch_pos,
+            "yaw_span_deg": self._yaw_span_deg(),
+            "throttle_span": self._throttle_span(),
+            "altitude_span_m": self._alt_span_m(),
+            "flow_bad_samples": self.flow_bad_samples,
             "velocity_scale": observer.correction.velocity_scale,
             "confidence": observer.correction.confidence,
             "best_observer_score": observer.best_score,
@@ -431,8 +760,4 @@ class LegacyBrakeCalibrator:
         self.profile_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def _announce(self, master, text: str) -> None:
-        try:
-            master.mav.statustext_send(mavutil.mavlink.MAV_SEVERITY_NOTICE, f"LEGACY SLAM: {text}"[:50].encode("utf-8"))
-        except Exception:
-            pass
-        print(f"LEGACY SLAM: {text}")
+        send_gcs(master, text, direct_sender=self.direct_status_sender)

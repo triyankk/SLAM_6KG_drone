@@ -50,7 +50,7 @@ class FlightControllerSetupConfig:
     velz_source: int = 0
     yaw_source: int = 1
     avoid_enable: int = 7
-    avoid_margin_m: float = 2.0
+    avoid_margin_m: float = 1.5
     prx1_type: int = 2
     gps2_type: int | None = None
     gps_auto_switch: int | None = None
@@ -268,7 +268,7 @@ def send_play_tune(master, tune: str, fallback_text: str) -> None:
 
 
 def send_startup_beeps(master) -> None:
-    send_play_tune(master, "MFT200L8AAA", "startup check alive after 30s; monitoring only until FIELD GATE OK")
+    send_play_tune(master, "MFT200L8AAA", "startup check alive after 45s; monitoring only until FIELD GATE OK")
 
 
 def send_sensor_check_beep(master) -> None:

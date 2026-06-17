@@ -39,7 +39,7 @@ This field machine now starts the legacy bridge from the user crontab:
 @reboot /home/atas/vscode/intellisense_slam/legacy_flow_bridge/legacy_boot_cron.sh
 ```
 
-The launcher waits 30 seconds, takes `runtime/legacy_flow_bridge.lock`, and
+The launcher waits 45 seconds, takes `runtime/legacy_flow_bridge.lock`, and
 runs `./run_field_legacy.sh`.
 
 The current SLAM bridge is blocked on boot because
@@ -85,11 +85,16 @@ In LOITER:
 
 - Drone remains normal GPS LOITER.
 - Bridge only observes and learns.
-- GCS messages start with `LEGACY SLAM:`.
+- GCS messages are compact so QGC does not hide the useful part:
+  `LGC OBS ON`, `LGC OBS WAIT`, `LGC OBS READY`, `LGC OBS WEAK`.
 
 In BRAKE:
 
-- Legacy calibration bookkeeping starts.
+- Guided manual calibration starts and reports progress in GCS.
+- Expected messages include `LGC CAL 10% HOLD`, `LGC CAL 40% PITCH`,
+  `LGC CAL 70% YAW`, and `LGC CAL DONE 100%`.
+- The bridge asks the pilot for gentle roll, pitch, yaw, and climb/descend
+  observations; it does not inject attitude/throttle commands itself.
 - No automatic takeoff is commanded.
 - No deliberate movement is commanded by the new observer/calibration layer.
 

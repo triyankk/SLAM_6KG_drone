@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from .fc_config import FlightControllerSetupConfig
+from .gps_denied_readiness import GpsDeniedReadinessConfig
 
 
 def _default_ports() -> list[str]:
@@ -36,15 +37,15 @@ def _as_bool(value: Any) -> bool:
 class ObstacleAvoidanceConfig:
     """LiDAR/proximity publisher settings.
 
-    Publishing obstacle distances is separate from commanding movement. Keep
-    `enabled` false until SLAM position hold itself is stable.
+    Publishing obstacle distances is separate from commanding movement. This
+    default only publishes proximity/obstacle data to ArduPilot.
     """
 
     enabled: bool = True
     lidar_enabled: bool = True
     lidar_port: str = "auto"
     lidar_baud: int = 3000000
-    safety_distance_m: float = 2.0
+    safety_distance_m: float = 1.5
     publish_rate_hz: float = 5.0
     sensor_id: int = 20
     sector_count: int = 72
@@ -84,6 +85,16 @@ class GpsInputConfig:
     vert_accuracy_m: float = 1.0
     speed_accuracy_m_s: float = 0.3
     update_rate_hz: float = 8.0
+
+
+@dataclass
+class ExternalPoseConfig:
+    """UDP JSON pose input for a ROS/Cartographer/OpenVINS sidecar."""
+
+    bind_host: str = "127.0.0.1"
+    bind_port: int = 15560
+    max_age_s: float = 0.35
+    first_sample_timeout_s: float = 3.0
 
 
 @dataclass
@@ -198,11 +209,13 @@ class SlamBridgeConfig:
     status_log_seconds: float = 10.0
     heartbeat_timeout_seconds: float = 8.0
     connect_in_standby: bool = True
-    boot_delay_seconds: float = 30.0
+    boot_delay_seconds: float = 45.0
     fc_setup: FlightControllerSetupConfig = field(default_factory=FlightControllerSetupConfig)
     obstacle: ObstacleAvoidanceConfig = field(default_factory=ObstacleAvoidanceConfig)
     qgc: QgcBridgeConfig = field(default_factory=QgcBridgeConfig)
     gps_input: GpsInputConfig = field(default_factory=GpsInputConfig)
+    external_pose: ExternalPoseConfig = field(default_factory=ExternalPoseConfig)
+    gps_denied: GpsDeniedReadinessConfig = field(default_factory=GpsDeniedReadinessConfig)
     lidar_steering: LidarSteeringConfig = field(default_factory=LidarSteeringConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     soft_calibration: SoftCalibrationConfig = field(default_factory=SoftCalibrationConfig)
@@ -235,6 +248,12 @@ class SlamBridgeConfig:
         gps_input_data = data.get("gps_input", {}) or {}
         if not isinstance(gps_input_data, dict):
             raise ValueError("config 'gps_input' must be a mapping")
+        external_pose_data = data.get("external_pose", {}) or {}
+        if not isinstance(external_pose_data, dict):
+            raise ValueError("config 'external_pose' must be a mapping")
+        gps_denied_data = data.get("gps_denied", {}) or {}
+        if not isinstance(gps_denied_data, dict):
+            raise ValueError("config 'gps_denied' must be a mapping")
         lidar_steering_data = data.get("lidar_steering", {}) or {}
         if not isinstance(lidar_steering_data, dict):
             raise ValueError("config 'lidar_steering' must be a mapping")
@@ -276,6 +295,11 @@ class SlamBridgeConfig:
         )
         if observer_status_path and not Path(observer_status_path).is_absolute():
             observer_status_path = str((base_dir / observer_status_path).resolve())
+        gps_denied_status_path = str(
+            gps_denied_data.get("status_path", "logs/gps_denied_readiness.json") or ""
+        )
+        if gps_denied_status_path and not Path(gps_denied_status_path).is_absolute():
+            gps_denied_status_path = str((base_dir / gps_denied_status_path).resolve())
         return cls(
             ports=[str(port) for port in ports],
             baud=int(data.get("baud", 115200)),
@@ -292,7 +316,7 @@ class SlamBridgeConfig:
             status_log_seconds=float(data.get("status_log_seconds", 10.0)),
             heartbeat_timeout_seconds=float(data.get("heartbeat_timeout_seconds", 8.0)),
             connect_in_standby=_as_bool(data.get("connect_in_standby", True)),
-            boot_delay_seconds=float(data.get("boot_delay_seconds", 30.0)),
+            boot_delay_seconds=float(data.get("boot_delay_seconds", 45.0)),
             fc_setup=FlightControllerSetupConfig(
                 enabled=_as_bool(fc_setup_data.get("enabled", True)),
                 slam_source_set=int(fc_setup_data.get("slam_source_set", 3)),
@@ -306,7 +330,7 @@ class SlamBridgeConfig:
                 require_rangefinder_height=_as_bool(fc_setup_data.get("require_rangefinder_height", True)),
                 ahrs_ekf_type=int(fc_setup_data.get("ahrs_ekf_type", 3)),
                 avoid_enable=int(fc_setup_data.get("avoid_enable", 7)),
-                avoid_margin_m=float(fc_setup_data.get("avoid_margin_m", 2.0)),
+                avoid_margin_m=float(fc_setup_data.get("avoid_margin_m", 1.5)),
                 ek2_enable=int(fc_setup_data.get("ek2_enable", 0)),
                 ek3_enable=int(fc_setup_data.get("ek3_enable", 1)),
                 ek3_src_options=int(fc_setup_data.get("ek3_src_options", 0)),
@@ -338,7 +362,7 @@ class SlamBridgeConfig:
                 lidar_enabled=_as_bool(obstacle_data.get("lidar_enabled", True)),
                 lidar_port=str(obstacle_data.get("lidar_port", "auto")),
                 lidar_baud=int(obstacle_data.get("lidar_baud", 3000000)),
-                safety_distance_m=float(obstacle_data.get("safety_distance_m", 2.0)),
+                safety_distance_m=float(obstacle_data.get("safety_distance_m", 1.5)),
                 publish_rate_hz=float(obstacle_data.get("publish_rate_hz", 5.0)),
                 sensor_id=int(obstacle_data.get("sensor_id", 20)),
                 sector_count=int(obstacle_data.get("sector_count", 72)),
@@ -368,6 +392,38 @@ class SlamBridgeConfig:
                 vert_accuracy_m=float(gps_input_data.get("vert_accuracy_m", 1.0)),
                 speed_accuracy_m_s=float(gps_input_data.get("speed_accuracy_m_s", 0.3)),
                 update_rate_hz=float(gps_input_data.get("update_rate_hz", 8.0)),
+            ),
+            external_pose=ExternalPoseConfig(
+                bind_host=str(external_pose_data.get("bind_host", "127.0.0.1")),
+                bind_port=int(external_pose_data.get("bind_port", 15560)),
+                max_age_s=float(external_pose_data.get("max_age_s", 0.35)),
+                first_sample_timeout_s=float(external_pose_data.get("first_sample_timeout_s", 3.0)),
+            ),
+            gps_denied=GpsDeniedReadinessConfig(
+                enabled=_as_bool(gps_denied_data.get("enabled", True)),
+                require_imu=_as_bool(gps_denied_data.get("require_imu", True)),
+                require_rc_link=_as_bool(gps_denied_data.get("require_rc_link", True)),
+                require_rangefinder=_as_bool(gps_denied_data.get("require_rangefinder", True)),
+                require_ekf_status=_as_bool(gps_denied_data.get("require_ekf_status", True)),
+                require_attitude=_as_bool(gps_denied_data.get("require_attitude", True)),
+                require_local_position=_as_bool(gps_denied_data.get("require_local_position", True)),
+                require_origin_for_gps_input=_as_bool(
+                    gps_denied_data.get("require_origin_for_gps_input", True)
+                ),
+                require_calibration_or_observer=_as_bool(
+                    gps_denied_data.get("require_calibration_or_observer", True)
+                ),
+                stable_seconds=float(gps_denied_data.get("stable_seconds", 3.0)),
+                max_pose_dt_s=float(gps_denied_data.get("max_pose_dt_s", 0.35)),
+                max_pose_jump_m=float(gps_denied_data.get("max_pose_jump_m", 1.25)),
+                max_velocity_m_s=float(gps_denied_data.get("max_velocity_m_s", 5.0)),
+                max_rangefinder_disagreement_m=float(
+                    gps_denied_data.get("max_rangefinder_disagreement_m", 1.0)
+                ),
+                min_observer_score=float(gps_denied_data.get("min_observer_score", 7.0)),
+                announce_interval_s=float(gps_denied_data.get("announce_interval_s", 10.0)),
+                status_write_interval_s=float(gps_denied_data.get("status_write_interval_s", 1.0)),
+                status_path=gps_denied_status_path,
             ),
             lidar_steering=LidarSteeringConfig(
                 enabled=_as_bool(lidar_steering_data.get("enabled", False)),

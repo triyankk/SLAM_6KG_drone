@@ -16,7 +16,13 @@ local STATE_SOURCE_SET_ACTIVE = 50
 local STATE_GPS_SOURCE_ACTIVE = 51
 local STATE_NO_GPS_SOURCE_ACTIVE = 52
 local STATE_GPS_LESS_FLIGHT_ACTIVE = 53
+local STATE_POSHOLD_READY = 54
 local STATE_MANUAL_ORIGIN = 60
+local STATE_CALIBRATION_WAITING_ARM = 68
+local STATE_CALIBRATION_WAITING_TAKEOFF = 69
+local STATE_CALIBRATION_ACTIVE = 70
+local STATE_CALIBRATION_COMPLETE_RTL = 71
+local STATE_SLAM_FLIGHT_ACTIVE = 72
 local STATE_CONFIG_FAILED = 80
 local STATE_GPS_TIMEOUT = 81
 local STATE_SOURCE_SWITCH_FAILED = 82
@@ -47,7 +53,7 @@ local function gps_summary_text()
     local instance = get_primary_gps_instance()
     local fix = gps:status(instance) or 0
     local sats = gps:num_sats(instance) or 0
-    return string.format("GPS waiting for home fix=%d sats=%d", fix, sats)
+    return string.format("GPS-DENIED WAIT: GPS fix=%d sats=%d", fix, sats)
 end
 
 local function send_notice(text)
@@ -107,12 +113,42 @@ local function relay_state_change(state_code, source_set_id)
     end
 
     if state_code == STATE_GPS_LESS_FLIGHT_ACTIVE then
-        send_notice("GPS-Less flight active")
+        send_notice("GPS-DENIED ACTIVE: POSHOLD using flow")
+        return
+    end
+
+    if state_code == STATE_POSHOLD_READY then
+        send_notice("NO-GPS POSHOLD gate ready")
         return
     end
 
     if state_code == STATE_MANUAL_ORIGIN then
         send_notice("Manual origin set, flow source pending")
+        return
+    end
+
+    if state_code == STATE_CALIBRATION_WAITING_ARM then
+        send_notice("Brake mode detected. Waiting for arm to start SLAM calibration.")
+        return
+    end
+
+    if state_code == STATE_CALIBRATION_WAITING_TAKEOFF then
+        send_notice("Brake calibration waiting for takeoff or rangefinder height.")
+        return
+    end
+
+    if state_code == STATE_CALIBRATION_ACTIVE then
+        send_notice("BRAKE calibration active")
+        return
+    end
+
+    if state_code == STATE_CALIBRATION_COMPLETE_RTL then
+        send_notice("Calibration successful: SLAM profile saved")
+        return
+    end
+
+    if state_code == STATE_SLAM_FLIGHT_ACTIVE then
+        send_notice("GPS-DENIED ACTIVE: SLAM flight confirmed")
         return
     end
 
@@ -173,7 +209,7 @@ local function update()
     if current_state == STATE_GPS_LESS_FLIGHT_ACTIVE then
         gps_less_ticks = gps_less_ticks + 1
         if gps_less_ticks >= 6 then
-            send_notice("GPS-Less flight active")
+            send_notice("GPS-DENIED ACTIVE: POSHOLD using flow")
             gps_less_ticks = 0
         end
     else

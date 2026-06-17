@@ -10,7 +10,8 @@ Group=__GROUP__
 SupplementaryGroups=dialout
 WorkingDirectory=__WORKDIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/env python3 __WORKDIR__/scripts/avoidance/hesai_jt16_obstacle_node.py --config __WORKDIR__/config/sensors.yaml --mavport /dev/ttyACM1
+ExecStartPre=/bin/sleep 45
+ExecStart=/usr/bin/env python3 __WORKDIR__/scripts/avoidance/hesai_jt16_obstacle_node.py --config __WORKDIR__/config/sensors.yaml --mavport udpout:127.0.0.1:14555
 Restart=always
 RestartSec=5
 

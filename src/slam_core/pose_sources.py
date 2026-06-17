@@ -2,10 +2,9 @@ import csv
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from .types import PoseSample
-from .vio_backend import VioPoseSource
 
 
 def quaternion_from_yaw(yaw_rad: float) -> tuple[float, float, float, float]:
@@ -136,7 +135,7 @@ class CsvReplayPoseSource:
         )
 
 
-def make_pose_source(source: str, csv_path: str = "") -> PoseSource:
+def make_pose_source(source: str, csv_path: str = "", external_pose_config: Any | None = None) -> PoseSource:
     if source == "hover":
         return HoverPoseSource()
     if source == "circle":
@@ -146,5 +145,18 @@ def make_pose_source(source: str, csv_path: str = "") -> PoseSource:
             raise ValueError("--csv-path is required when --source csv")
         return CsvReplayPoseSource.from_path(csv_path)
     if source == "vio":
+        from .vio_backend import VioPoseSource
+
         return VioPoseSource()
+    if source in {"external_udp", "slam_udp"}:
+        from .external_pose import ExternalPoseUdpSource
+
+        if external_pose_config is None:
+            return ExternalPoseUdpSource()
+        return ExternalPoseUdpSource(
+            bind_host=str(getattr(external_pose_config, "bind_host", "127.0.0.1")),
+            bind_port=int(getattr(external_pose_config, "bind_port", 15560)),
+            max_age_s=float(getattr(external_pose_config, "max_age_s", 0.35)),
+            first_sample_timeout_s=float(getattr(external_pose_config, "first_sample_timeout_s", 3.0)),
+        )
     raise ValueError(f"Unsupported source: {source}")

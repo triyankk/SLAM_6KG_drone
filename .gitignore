@@ -32,6 +32,10 @@ htmlcov/
 logs/
 *.log
 captures/
+log_bin/
+legacy_flow_bridge/realsense_optical_flow_to_cube_of/
+config/logs/
+scripts/logs/
 
 # Local environment files
 .env
@@ -61,6 +65,8 @@ Thumbs.db
 # Generated calibration/runtime outputs (optional - remove if you want these tracked)
 calibration_run.csv
 camera_to_imu_extrinsics.json
+runtime/
+config/runtime/
 
 # Jetson / device artifacts (do NOT commit /dev nodes)
 /dev/
@@ -68,4 +74,3 @@ camera_to_imu_extrinsics.json
 # Misc
 coverage.xml
 report.xml
-

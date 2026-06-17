@@ -81,7 +81,7 @@ def test_slam_source_set_parameters_are_scoped():
     assert params["EK3_SRC1_VELZ"] == 0.0
     assert params["EK3_SRC1_YAW"] == 1.0
     assert "EK3_SRC2_POSXY" not in params
-    assert params["AVOID_MARGIN"] == 2.0
+    assert params["AVOID_MARGIN"] == 1.5
     assert params["PRX1_TYPE"] == 2.0
     assert "GPS2_TYPE" not in params
 
@@ -334,4 +334,4 @@ def test_autostart_config_uses_gated_gps2_bridge_mode():
     assert config.fc_setup.viso_type == 0
     assert config.fc_setup.gps2_type == 14
     assert config.gps_input.enabled is True
-    assert config.obstacle.safety_distance_m == 2.0
+    assert config.obstacle.safety_distance_m == 1.5

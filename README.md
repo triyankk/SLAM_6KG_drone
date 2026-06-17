@@ -13,25 +13,30 @@ behavior, and manual override are validated on the actual aircraft.
 The Jetson runs a companion service that:
 
 - connects to the Cube over MAVLink serial
-- starts after boot through `intellisense_slam_bridge.service`
+- currently starts after boot through `legacy_flow_bridge/legacy_boot_cron.sh`
+  on the field Jetson
 - reads VIO/SLAM pose, external IMU, rangefinder, GPS, EKF, RC, battery, and mode telemetry
 - forwards useful telemetry and `STATUSTEXT` messages to QGC/MK15
 - observes normal GPS LOITER flight to score SLAM quality
 - runs the real SLAM calibration workflow when the pilot selects BRAKE
 - feeds SLAM-derived position to ArduPilot through GPS2 MAVLink `GPS_INPUT`
 - keeps MAVLink `ODOMETRY` suppressed in GPS2 mode to avoid VisOdom rejection
+- runs the Hesai JT16 LiDAR obstacle node beside the legacy bridge; RC7 low is
+  detect-only and RC7 high engages ArduPilot native obstacle avoidance
 - logs field status to JSON and text logs for later review
 
 The intended high-level flight sequence is:
 
 1. Boot Jetson and Cube.
 2. Let the bridge start automatically.
-3. Wait for normal GPS readiness outdoors.
-4. Take off and fly normally in LOITER.
-5. Let LOITER observation collect stable reference data.
-6. Switch to BRAKE to run the real calibration workflow.
-7. Test SLAM/GPS2 PosHold only after the GCS says quality/calibration is ready.
-8. Keep pilot override and LOITER fallback available at all times.
+3. Verify `OA DETECT ONLY` with RC7 low/neutral.
+4. Flick RC7 high/low on the ground and verify engage/disengage beeps.
+5. Wait for normal GPS readiness outdoors.
+6. Take off and fly normally in LOITER.
+7. Let LOITER observation collect stable reference data.
+8. Switch to BRAKE to run the real calibration workflow.
+9. Test SLAM/GPS2 PosHold only after the GCS says quality/calibration is ready.
+10. Keep pilot override and LOITER fallback available at all times.
 
 ## What This Project Does Not Do
 
@@ -95,7 +100,7 @@ Current field-machine boot setup:
 - `config/autostart.yaml` has been moved to `config/autostart.yaml.disabled_legacy_boot`.
 - That makes the still-enabled `intellisense_slam_bridge.service` skip itself on boot.
 - The user's crontab starts `legacy_flow_bridge/legacy_boot_cron.sh` at reboot.
-- The legacy launcher waits 30 seconds, then runs `legacy_flow_bridge/run_field_legacy.sh`.
+- The legacy launcher waits 45 seconds, then runs `legacy_flow_bridge/run_field_legacy.sh`.
 
 ```bash
 sudo systemctl stop intellisense_slam_bridge.service
@@ -364,6 +369,17 @@ tail -f logs/slam_calibration.log
 tail -f logs/slam_loiter_observer.log
 ```
 
+Check whether a downloaded ArduPilot `.bin` actually flew GPS-less PosHold:
+
+```bash
+python3 scripts/diagnostics/analyze_gpsless_flight_log.py "/path/to/flight.bin"
+```
+
+The diagnostic looks for armed `POSHOLD`, GPS1/GPS2 health, `GPS_PRIMARY`,
+`SCR_USER1` bridge states, and companion `SLAM`/`CAL`/`NO-GPS` messages. If GPS1
+is healthy, GPS2 is bad, or no bridge state proves no-GPS mode, treat the flight
+as GPS-assisted.
+
 ## GCS Messages
 
 The bridge sends `STATUSTEXT` messages prefixed with `SLAM:`.
@@ -377,7 +393,7 @@ SLAM: VIO feed method: GPS2 GPS_INPUT. VisOdom/ExternalNav is disabled.
 SLAM: MAVLink ODOMETRY is suppressed in GPS2 mode to avoid VisOdom health errors.
 SLAM: GPS2 stream is gated by Brake calibration or LOITER observer quality.
 SLAM: SLAM observer ready. LOITER soft calibration available.
-SLAM: BEEP: startup check alive after 30s; monitoring only until FIELD GATE OK
+SLAM: BEEP: startup check alive after 45s; monitoring only until FIELD GATE OK
 SLAM: FIELD GATE WAIT: GPS1 not ready fix=1 sats=0; GPS2 standby not confirmed fix=1 sats=0
 SLAM: JETSON EVENT: script running; disarmed mode=STABILIZE; waiting for FIELD GATE OK.
 SLAM: FIELD GATE OK: GPS LOITER and BRAKE calibration inputs ready. Wait for NO-GPS POSHOLD GATE before SLAM PosHold.
@@ -424,7 +440,7 @@ SLAM quality critical: fallback to LOITER recommended.
 SLAM quality critical: switching to LOITER.
 ```
 
-## Beeps
+## Audio And Messages
 
 The Cube Lua beeper listens to bridge state params:
 
@@ -440,9 +456,27 @@ APM/scripts/brake_slam_beeper.lua
 
 Then reboot the Cube.
 
+For direct Cube USB/telemetry GCS setups, this same Lua file also relays
+obstacle avoidance status from Jetson `SCR_USER4`:
+
+- `OA MONITOR: LiDAR scan active; FC avoidance disabled.`
+- `OA ACTIVE: FC native avoidance receiving LiDAR.`
+- `OA WARNING: obstacle inside warning range.`
+- `OA KEEP OUT: obstacle inside 1.5m.`
+- `OA CRITICAL: obstacle near 0.5m.`
+- `OA STALE: LiDAR obstacle data not fresh.`
+
+Update this Lua file on the Cube SD card whenever obstacle-status relay logic
+changes.
+
+If RC7 switching plays the confirmation beep but QGC/MK15 does not show the OA
+message, the likely missing piece is this updated Lua file on the Cube SD card.
+The Jetson can send `PLAY_TUNE` directly, but Cube-origin Lua `gcs:send_text()`
+is the reliable telemetry text path.
+
 Current intent:
 
-- 30 seconds after Jetson/MAVLink start: three short beeps plus `SLAM: BEEP: startup check alive after 30s; monitoring only until FIELD GATE OK`
+- 45 seconds after Jetson/MAVLink start: three short beeps plus `SLAM: BEEP: startup check alive after 45s; monitoring only until FIELD GATE OK`
 - sensor quick check passed: one short beep plus `SLAM: BEEP: sensor quick check passed; VIO/IMU basic health only, not full readiness`
 - field readiness: GCS text only, `SLAM: FIELD GATE OK...`
 - No-GPS PosHold gate: rising tone plus `SLAM: NO-GPS POSHOLD GATE OK...`
@@ -452,12 +486,13 @@ Current intent:
 - failure: descending warning tone plus `SLAM: BEEP: SLAM calibration failed; leave SLAM PosHold disabled`
 - real SLAM/GPS2 PosHold active: short heartbeat beep plus a GCS message every 10 seconds
 
-The source of truth is Jetson `STATUSTEXT`. Every Jetson-commanded beep is
-prefixed with `SLAM: BEEP:` so the operator sees the reason for the sound. The
-Lua helper on the Cube is only a backup status relay and should not duplicate
-normal Jetson startup/ready/calibration tunes. If the aircraft still plays the
-old musical tune immediately after entering Brake while disarmed, the Cube is
-still running an old Lua script from its SD card.
+The source of truth for SLAM state is Jetson `STATUSTEXT`. SLAM and calibration
+beeps are allowed before arming because they are pre-arm health cues. Only
+obstacle-avoidance beeps are armed-only. The Lua helper on the Cube is a
+backup/USB-visible relay and should not duplicate normal Jetson
+startup/ready/calibration tunes. If the aircraft still plays the old musical
+tune immediately after entering Brake while disarmed, the Cube is still running
+an old Lua script from its SD card.
 
 ## LOITER Soft Calibration
 
@@ -496,9 +531,62 @@ Live soft correction:
 - not applied to normal LOITER control
 - not applied if SLAM quality is below the configured threshold
 
-The startup beep/status delay is 30 seconds. During real SLAM/GPS2 POSHOLD,
+The startup status delay is 45 seconds. During real SLAM/GPS2 POSHOLD,
 the bridge sends the No-GPS POSHOLD status message every 10 seconds while the
 SLAM-derived GPS2 stream is actually being sent.
+
+## GPS-Denied Gate And External SLAM
+
+The bridge now has a dedicated GPS-denied readiness gate. It writes:
+
+```text
+logs/gps_denied_readiness.json
+```
+
+and periodically reports one compact GCS message:
+
+- `GPS-DENIED WAIT: ...` means one or more required signals are still blocked.
+- `GPS-DENIED STABILIZING: ...` means all required signals are present but have not been stable long enough.
+- `GPS-DENIED READY: ...` means the SLAM feed is healthy enough for a cautious No-GPS PosHold test.
+- `GPS-DENIED ACTIVE: ...` means the vehicle is armed in the configured SLAM mode and the SLAM GPS2 feed is recent.
+
+The gate checks MAVLink heartbeat, RC link, external IMU, EKF local position,
+EKF status, attitude telemetry, rangefinder height, SLAM pose quality,
+pose timestamp gaps, pose jumps, range/SLAM height agreement, GPS2 origin, and
+Brake calibration or LOITER observer readiness.
+
+For Cartographer, OpenVINS, RTAB-Map, ROS, or another sidecar, set:
+
+```yaml
+source: external_udp
+external_pose:
+  bind_host: 127.0.0.1
+  bind_port: 15560
+```
+
+Then send UDP JSON in local NED position and body FRD attitude:
+
+```json
+{
+  "timestamp_us": 1770000000000000,
+  "x_m": 0.0,
+  "y_m": 0.0,
+  "z_m": -2.0,
+  "qw": 1.0,
+  "qx": 0.0,
+  "qy": 0.0,
+  "qz": 0.0,
+  "vx_m_s": 0.0,
+  "vy_m_s": 0.0,
+  "vz_m_s": 0.0,
+  "pose_quality": 90,
+  "tracking_state": "ok",
+  "source_name": "cartographer"
+}
+```
+
+ROS ENU poses must be converted by the sidecar before sending. The bridge will
+not silently reinterpret ENU as NED.
 
 ## Brake Mode Calibration
 
@@ -555,17 +643,22 @@ Use this sequence for the current GPS-assisted validation path:
 3. Confirm passive monitor is disabled.
 4. Confirm only one process owns the Cube serial port.
 5. Open QGC/MK15.
-6. Wait outside for GPS1 3D fix and good satellites.
-7. Confirm QGC does not show blocking prearm errors.
-8. Arm in a normal pilot-controlled mode.
-9. Take off normally.
-10. Switch to LOITER and verify normal GPS flight.
-11. Let LOITER observation run.
-12. Watch GCS messages and `logs/slam_loiter_observer.log`.
-13. Switch to BRAKE to run real calibration.
-14. Wait for calibration success or explicit failure reason.
-15. Return to LOITER if anything looks wrong.
-16. Only test POSHOLD after SLAM quality/calibration is ready.
+6. Confirm RC7 low/neutral reports `OA DETECT ONLY`.
+7. Flick RC7 high and confirm `OA ENGAGED` plus the engage beep.
+8. Flick RC7 low again and confirm `OA DETECT ONLY` plus the disengage beep.
+9. If the beeps work but QGC text does not, update Cube SD Lua before relying on telemetry text.
+10. Wait outside for GPS1 3D fix and good satellites.
+11. Confirm QGC does not show blocking prearm errors.
+12. Arm in a normal pilot-controlled mode.
+13. Take off normally.
+14. Switch to LOITER and verify normal GPS flight.
+15. Let LOITER observation run.
+16. For first OA flight test, use CH7 high only at low speed in open space.
+17. Watch GCS messages, `logs/slam_loiter_observer.log`, and `logs/gps_denied_readiness.json`.
+18. Switch to BRAKE to run real calibration.
+19. Wait for calibration success or explicit failure reason.
+20. Return to LOITER if anything looks wrong.
+21. Only test POSHOLD after `GPS-DENIED READY` and `NO-GPS POSHOLD GATE OK`.
 
 Recommended first tests:
 
@@ -779,7 +872,40 @@ QGC crashing during parameter download:
 
 ## LiDAR / Obstacle Tools
 
-LiDAR support is present but not the current flight-readiness gate.
+The top-mounted Hesai JT16 obstacle node is designed as a two-layer system:
+
+- **Default flight path:** `config/sensors.yaml` uses `avoidance.mode: "rc_toggle"`. RC channel 7 low keeps LiDAR in detect-only mode; RC channel 7 high engages ArduPilot native avoidance.
+- **Detect-only state:** the Jetson keeps publishing MAVLink `OBSTACLE_DISTANCE` so PRX remains connected, but sets `AVOID_ENABLE=0`.
+- **Avoidance engaged state:** the Jetson sets `AVOID_ENABLE=7`, keeps `PRX1_TYPE=2`, and lets ArduPilot native avoidance handle stick-limited avoidance in supported modes.
+- **Code toggle:** set `avoidance.mode: "monitor_only"` to disable ArduPilot PRX/avoidance while keeping scan logs and GCS status, or `native_avoidance` to force avoidance always on. Keep `direct_velocity` for no-prop experiments only.
+- **Keepout target:** `config/sensors.yaml` sets a 1.5 m avoidance margin and a 0.5 m critical zone. The computed push vector grows as an object gets closer.
+- **GCS status:** expect `OA DETECT ONLY: RC7=...` when the switch is low and `OA ENGAGED: RC7=...` when the switch is high.
+- **RC7 switch beeps:** when RC7 crosses high, the Jetson sends a short rising
+  confirmation tune. When RC7 returns low, it sends a separate disengage tune.
+  These are separate from armed-only obstacle warning beeps.
+- **GCS routing:** obstacle text is sent to the Cube and mirrored directly to Jetson GCS UDP ports `14550`/`14551`.
+- **Audio:** obstacle audio is armed-only. Disarmed obstacle events are GCS text only; armed obstacles inside 1.5 m trigger warning beeps and armed critical obstacles near 0.5 m trigger rapid beeps.
+- **Direct companion motion:** disabled by default. It only sends body-frame velocity pulses when started with `--enable-motion`, not in dry-run, armed, airborne, fresh LiDAR, heartbeat healthy, and in `direct_allowed_modes` (`GUIDED` by default).
+- **MAVLink path:** the service uses `udpout:127.0.0.1:14555` so it does not steal the Cube serial port from the main bridge.
+
+USB field topology:
+
+- Cube <-> Jetson stays on USB, normally `/dev/ttyACM0`.
+- The legacy bridge is the only process that should open the Cube USB port.
+- LiDAR avoidance sends MAVLink to the bridge through local Jetson UDP `14555`; the bridge forwards it to the Cube over USB.
+- LiDAR obstacle GCS text is also mirrored to Jetson UDP `14550`/`14551` so it does not depend on Cube rebroadcasting companion `STATUSTEXT`.
+- Do not point the LiDAR node at `/dev/ttyACM0` while the bridge is running.
+- If a GCS is plugged directly into the Cube USB, stop the bridge first or the two connections can fight for the same port.
+
+ArduPilot references:
+
+- <https://ardupilot.org/copter/docs/common-simple-object-avoidance.html>
+- <https://ardupilot.org/copter/docs/common-realsense-depth-camera.html>
+
+The expected engaged params are `PRX1_TYPE=2`, `AVOID_ENABLE=7`,
+`AVOID_MARGIN=1.5`, and `PRX2_TYPE/PRX3_TYPE/PRX4_TYPE=0`.
+With RC7 low, `PRX1_TYPE` should remain `2` but `AVOID_ENABLE` should read `0`.
+The current RC7 thresholds are `engage_pwm: 1700` and `disengage_pwm: 1300`.
 
 Check Hesai JT16:
 
@@ -796,14 +922,43 @@ python3 scripts/avoidance/visualize_lidar_avoidance.py
 Dry-run obstacle node:
 
 ```bash
-python3 scripts/avoidance/hesai_jt16_obstacle_node.py --dry-run
+python3 scripts/avoidance/hesai_jt16_obstacle_node.py --dry-run --mavport udpout:127.0.0.1:14555
 ```
 
-Do not enable real obstacle movement until SLAM flight itself is stable.
+Proximity publishing is still enabled in dry-run so PRX remains connected.
+Actual avoidance engagement still follows `avoidance.mode` and RC7. Direct
+companion movement is still off unless `--enable-motion` is used.
+
+Field validation order:
+
+- verify the LiDAR scan and zone direction with the visualizer
+- verify GCS messages while disarmed
+- verify `OBSTACLE_DISTANCE` / proximity data in Mission Planner or QGC
+- test with props removed before any direct companion motion experiment
+- keep pilot override ready and validate in open space before trusting close obstacles
 
 ## Recovery Commands
 
-Restart bridge:
+Current field boot uses the legacy cron launcher, not the newer systemd bridge.
+
+Restart only the LiDAR obstacle node:
+
+```bash
+pkill -f "scripts/avoidance/hesai_jt16_obstacle_node.py --config config/sensors.yaml --mavport udpout:127.0.0.1:14555"
+```
+
+The legacy launcher should restart it automatically.
+
+Restart the current legacy bridge only when the vehicle is disarmed/on the
+ground:
+
+```bash
+pkill -f "realsense_optical_flow_to_cube.py"
+```
+
+The legacy launcher should restart it automatically.
+
+Restart newer bridge service, only if the newer service path is restored:
 
 ```bash
 sudo systemctl restart intellisense_slam_bridge.service
@@ -842,6 +997,8 @@ Current status:
 - live soft correction is implemented with bounds
 - auto fallback to LOITER is implemented and gated by healthy GPS
 - real Brake calibration workflow remains separate
+- RC7-controlled LiDAR obstacle avoidance toggle is implemented:
+  detect-only with RC7 low, ArduPilot native avoidance with RC7 high
 
 Still requiring real flight validation:
 
@@ -853,7 +1010,8 @@ Still requiring real flight validation:
 - GPS2 SLAM feed behavior during cautious POSHOLD tests
 - auto fallback to LOITER
 - pilot manual override
-- obstacle avoidance integration
+- RC7 obstacle avoidance behavior at low speed in open space
+- reliable QGC/MK15 OA text, especially if Cube Lua has not been updated
 
 Do not describe the project as fully ready for No-GPS flight until those items
 are validated with logs.
