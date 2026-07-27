@@ -1,27 +1,30 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=59", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "intellisense-slam"
+name = "optflow-slam"
 version = "0.1.0"
-description = "Starting point for GPS-denied SLAM and MAVLink external navigation on Jetson"
-readme = "README.md"
+description = "GPS-independent optical-flow flight and Jetson SLAM foundation"
 requires-python = ">=3.10"
 dependencies = [
-  "numpy>=1.21",
-  "opencv-python>=4.5",
-  "PyYAML>=5.4",
-  "pymavlink>=2.4.49",
-  "pyserial>=3.5",
-  "pyrealsense2",
+    "numpy>=1.26,<2",
+    "Pillow>=11,<12",
+    "pymavlink>=2.4.49,<3",
+    "pyrealsense2==2.57.7.10387",
+    "pyserial>=3.5,<4",
+    "PyYAML>=6,<7",
 ]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[project.scripts]
+optflow-preflight = "optflow_slam.cli:main"
+optflow-rgb = "optflow_slam.camera_server:main"
+optflow-visualizer = "optflow_slam.visualizer_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
+addopts = "-q"
 pythonpath = ["src"]
+testpaths = ["tests"]

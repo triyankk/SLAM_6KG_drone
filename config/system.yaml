@@ -1,0 +1,76 @@
+schema_version: 1
+
+project:
+  name: optFlow_slam
+  stage: hardware_bringup
+
+flight_controller:
+  endpoint: /dev/ttyTHS1
+  baud: 921600
+  system_id: 1
+  companion_component_id: 191
+  heartbeat_timeout_s: 5.0
+  sample_window_s: 3.0
+  hflow_min_bench_quality: 1
+  hflow:
+    transport: DroneCAN
+    port: CAN2
+    flow_pos_z_m: 0.10
+    range_pos_z_m: 0.10
+    yaw_assumption: connectors_rear
+
+sensors:
+  depth_camera:
+    model: Intel RealSense D415
+    backend: realsense
+    mounting: forward
+    serial: "327322062285"
+    width: 640
+    height: 480
+    fps: 30
+    stream_host: 0.0.0.0
+    stream_port: 8770
+    jpeg_quality: 82
+  external_imu:
+    model: IM10A
+    symlink: /dev/imu_usb
+    usb_vid: 0x1A86
+    usb_pid: 0x7523
+  lidar:
+    model: HESAI_JT16_MINI
+    lidar_ip: 192.168.1.201
+    jetson_ip: 192.168.1.100
+    udp_port: 2368
+    packet_probe_s: 1.0
+    network_values_verified: false
+
+calibration:
+  camera_intrinsics_verified: false
+  camera_to_body_extrinsics_verified: false
+  imu_to_body_extrinsics_verified: false
+  lidar_to_body_extrinsics_verified: false
+  imu_noise_profile_verified: false
+  sensor_time_sync_verified: false
+
+navigation:
+  architecture: fixed_altitude_2_5d_first
+  global_planner: astar
+  local_planner: proven_collision_aware_library_tbd
+  autonomous_control_enabled: false
+  external_nav_to_cube_enabled: false
+  target_rate_hz: 10.0
+  initial_max_horizontal_speed_mps: 0.5
+  initial_max_vertical_speed_mps: 0.3
+  initial_max_yaw_rate_dps: 20.0
+  obstacle_stop_distance_m: 2.0
+  local_pose_stale_timeout_s: 0.20
+  command_stale_timeout_s: 0.50
+
+safety:
+  props_off_for_bench: true
+  forbidden_modes:
+    - STABILIZE
+    - GUIDED_NOGPS
+  standard_rtl_allowed_without_global_position: false
+  rc_disarm_switch_configured: false
+  automatic_ekf_source_switching_enabled: false

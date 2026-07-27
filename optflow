@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="${ROOT_DIR}/.venv/bin/python"
+
+usage() {
+    printf '%s\n' \
+        "Usage: ./optflow <command> [arguments]" \
+        "" \
+        "Commands:" \
+        "  setup       Create the local offline Python environment" \
+        "  build       Build the local visualizer frontend" \
+        "  test        Run Python tests and the frontend build" \
+        "  preflight   Run the read-only hardware readiness probe" \
+        "  camera      Start the forward RealSense RGB stream" \
+        "  build-ch341 Build the CH340/CH341 USB serial kernel driver" \
+        "  install-ch341 Install the driver and IMU udev rule as root" \
+        "  visualizer  Start the live H-Flow visualizer"
+}
+
+require_python() {
+    if [[ ! -x "${PYTHON}" ]]; then
+        printf 'Local environment is missing. Run: %s setup\n' "$0" >&2
+        exit 2
+    fi
+}
+
+command="${1:-}"
+if [[ -n "${command}" ]]; then
+    shift
+fi
+
+case "${command}" in
+    setup)
+        exec "${ROOT_DIR}/scripts/bootstrap.sh" "$@"
+        ;;
+    build)
+        npm --prefix "${ROOT_DIR}/visualizer" run build
+        ;;
+    test)
+        require_python
+        (
+            cd "${ROOT_DIR}"
+            "${PYTHON}" -m pytest
+        )
+        npm --prefix "${ROOT_DIR}/visualizer" run build
+        ;;
+    preflight)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/preflight.py" "$@"
+        ;;
+    camera)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/rgb_stream.py" "$@"
+        ;;
+    build-ch341)
+        make -C "${ROOT_DIR}/hardware/kernel/ch341" "$@"
+        ;;
+    install-ch341)
+        exec "${ROOT_DIR}/hardware/install-ch341.sh" "$@"
+        ;;
+    visualizer)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/visualizer.py" "$@"
+        ;;
+    help|-h|--help|"")
+        usage
+        ;;
+    *)
+        printf 'Unknown command: %s\n\n' "${command}" >&2
+        usage >&2
+        exit 2
+        ;;
+esac

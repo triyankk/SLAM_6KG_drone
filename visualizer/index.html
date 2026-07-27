@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="Live Cube and H-Flow optical-flow instrument"
+    />
+    <title>H-Flow 3D Visualizer</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="scene" aria-label="Live three-dimensional H-Flow view"></canvas>
+
+      <header class="topbar">
+        <div class="identity">
+          <span class="product-name">H-FLOW</span>
+          <span class="product-subtitle">3D optical-flow instrument</span>
+        </div>
+        <div class="link-cluster">
+          <span id="sourceBadge" class="source-badge">WAIT</span>
+          <span id="modeBadge" class="mode-badge">UNKNOWN</span>
+          <span id="armedBadge" class="armed-badge">DISARMED</span>
+          <span id="linkIndicator" class="link-indicator" aria-hidden="true"></span>
+          <span id="linkText" class="link-text">Connecting</span>
+        </div>
+      </header>
+
+      <aside class="telemetry-panel" aria-label="Optical-flow telemetry">
+        <section class="telemetry-section flow-section">
+          <div class="section-heading">
+            <span>RAW ANGULAR FLOW</span>
+            <span id="flowAge" class="sample-age">-- ms</span>
+          </div>
+          <div class="flow-readout">
+            <div class="flow-axis flow-axis-x">
+              <span class="axis-name">X</span>
+              <strong id="flowX">0.000</strong>
+              <span class="unit">rad/s</span>
+            </div>
+            <div class="flow-axis flow-axis-y">
+              <span class="axis-name">Y</span>
+              <strong id="flowY">0.000</strong>
+              <span class="unit">rad/s</span>
+            </div>
+          </div>
+          <div class="metric-row">
+            <span>Magnitude</span>
+            <strong id="flowMagnitude">0.000 rad/s</strong>
+          </div>
+        </section>
+
+        <section class="telemetry-section quality-section">
+          <div class="section-heading">
+            <span>FLOW QUALITY</span>
+            <strong id="qualityValue">0 / 255</strong>
+          </div>
+          <div class="quality-track" aria-hidden="true">
+            <span id="qualityFill" class="quality-fill"></span>
+          </div>
+        </section>
+
+        <section class="telemetry-section range-section">
+          <div class="section-heading">
+            <span>DOWN RANGE</span>
+            <span id="rangeAge" class="sample-age">-- ms</span>
+          </div>
+          <div class="primary-metric">
+            <strong id="rangeValue">0.00</strong>
+            <span>m</span>
+          </div>
+          <div class="metric-row">
+            <span>Sensor limits</span>
+            <strong id="rangeLimits">0.08 - 30.0 m</strong>
+          </div>
+        </section>
+
+        <section class="telemetry-section attitude-section">
+          <div class="section-heading">
+            <span>ATTITUDE</span>
+            <span id="attitudeAge" class="sample-age">-- ms</span>
+          </div>
+          <div class="attitude-grid">
+            <div>
+              <span>ROLL</span>
+              <strong id="rollValue">0.0 deg</strong>
+            </div>
+            <div>
+              <span>PITCH</span>
+              <strong id="pitchValue">0.0 deg</strong>
+            </div>
+            <div>
+              <span>YAW</span>
+              <strong id="yawValue">0.0 deg</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="telemetry-section imu-section">
+          <div class="section-heading">
+            <span>CUBE IMU</span>
+            <span id="imuAge" class="sample-age">-- ms</span>
+          </div>
+          <div class="imu-readouts">
+            <div class="imu-vector-block accel-block">
+              <div class="vector-heading">
+                <span>ACCEL</span>
+                <span>m/s2</span>
+              </div>
+              <div class="imu-grid">
+                <div>
+                  <span>X</span>
+                  <strong id="accelX">0.00</strong>
+                </div>
+                <div>
+                  <span>Y</span>
+                  <strong id="accelY">0.00</strong>
+                </div>
+                <div>
+                  <span>Z</span>
+                  <strong id="accelZ">0.00</strong>
+                </div>
+              </div>
+              <div class="metric-row">
+                <span>Magnitude</span>
+                <strong id="accelMagnitude">0.00 m/s2</strong>
+              </div>
+            </div>
+            <div class="imu-vector-block gyro-block">
+              <div class="vector-heading">
+                <span>GYRO</span>
+                <span>rad/s</span>
+              </div>
+              <div class="imu-grid">
+                <div>
+                  <span>X</span>
+                  <strong id="gyroX">0.000</strong>
+                </div>
+                <div>
+                  <span>Y</span>
+                  <strong id="gyroY">0.000</strong>
+                </div>
+                <div>
+                  <span>Z</span>
+                  <strong id="gyroZ">0.000</strong>
+                </div>
+              </div>
+              <div class="metric-row">
+                <span>Magnitude</span>
+                <strong id="gyroMagnitude">0.000 rad/s</strong>
+              </div>
+            </div>
+          </div>
+          <p id="imuSource" class="imu-source">Waiting for Cube IMU</p>
+        </section>
+
+        <section class="telemetry-section link-detail-section">
+          <div class="metric-row">
+            <span>Mode</span>
+            <strong id="modeValue">UNKNOWN</strong>
+          </div>
+          <div class="metric-row">
+            <span>Cube</span>
+            <strong id="systemValue">--</strong>
+          </div>
+          <p id="linkDetail" class="link-detail">Waiting for telemetry</p>
+        </section>
+      </aside>
+
+      <section class="trace-panel" aria-label="Recent optical-flow trace">
+        <div class="section-heading">
+          <span>10 SECOND TRACE</span>
+          <span class="trace-legend">
+            <i class="trace-key trace-x"></i>X
+            <i class="trace-key trace-y"></i>Y
+          </span>
+        </div>
+        <canvas id="traceCanvas" width="600" height="220"></canvas>
+      </section>
+
+      <div class="axis-legend" aria-label="Aircraft body axes">
+        <span class="axis-forward"><i></i>FORWARD +X</span>
+        <span class="axis-right"><i></i>RIGHT +Y</span>
+        <span class="axis-flow"><i></i>RAW FLOW</span>
+        <span class="axis-accel"><i></i>ACCEL</span>
+        <span class="axis-gyro"><i></i>GYRO</span>
+      </div>
+
+      <nav class="controlbar" aria-label="Visualizer controls">
+        <button
+          id="pauseButton"
+          class="icon-button"
+          type="button"
+          title="Pause display"
+          aria-label="Pause display"
+        >
+          <i data-lucide="pause"></i>
+        </button>
+        <button
+          id="resetButton"
+          class="icon-button"
+          type="button"
+          title="Reset camera"
+          aria-label="Reset camera"
+        >
+          <i data-lucide="rotate-ccw"></i>
+        </button>
+        <div class="view-toggle" role="group" aria-label="Camera view">
+          <button
+            id="perspectiveButton"
+            class="icon-button is-active"
+            type="button"
+            title="Perspective view"
+            aria-label="Perspective view"
+          >
+            <i data-lucide="box"></i>
+          </button>
+          <button
+            id="topButton"
+            class="icon-button"
+            type="button"
+            title="Top view"
+            aria-label="Top view"
+          >
+            <i data-lucide="scan"></i>
+          </button>
+        </div>
+        <label class="scale-control" title="Flow-vector display scale">
+          <span>VECTOR</span>
+          <input
+            id="vectorScale"
+            type="range"
+            min="0.5"
+            max="5"
+            value="2.5"
+            step="0.1"
+            aria-label="Flow-vector display scale"
+          />
+          <output id="vectorScaleValue">2.5x</output>
+        </label>
+        <button
+          id="recordButton"
+          class="icon-button"
+          type="button"
+          title="Record telemetry"
+          aria-label="Record telemetry"
+        >
+          <i data-lucide="circle"></i>
+        </button>
+        <button
+          id="downloadButton"
+          class="icon-button"
+          type="button"
+          title="Download recorded CSV"
+          aria-label="Download recorded CSV"
+          disabled
+        >
+          <i data-lucide="download"></i>
+        </button>
+      </nav>
+
+      <div id="displayState" class="display-state" hidden>DISPLAY PAUSED</div>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

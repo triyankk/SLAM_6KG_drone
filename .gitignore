@@ -1,76 +1,33 @@
-# Bytecode
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Packaging/build
-dist/
-build/
-*.egg-info/
-pip-wheel-metadata/
-wheels/
-
-# Test / tooling caches
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+Module.symvers
+modules.order
 .pytest_cache/
-.mypy_cache/
-.cache/
-.tox/
-.nox/
-
-# Coverage
-.coverage
-.coverage.*
-htmlcov/
-
-# Logs
+.venv/
+build/
+dist/
+*.egg-info/
 logs/
-*.log
-captures/
-log_bin/
-legacy_flow_bridge/realsense_optical_flow_to_cube_of/
-config/logs/
-scripts/logs/
-
-# Local environment files
-.env
-.env.*
-
-# Editor/IDE
-.vscode/
-.idea/
-*.iml
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Editor swap/temp files
-*~
-*.swp
-*.swo
-
-# Compiled extensions
-*.so
-
-# Databases / runtime artifacts
-*.sqlite3
-*.db
-
-# Generated calibration/runtime outputs (optional - remove if you want these tracked)
-calibration_run.csv
-camera_to_imu_extrinsics.json
-runtime/
-config/runtime/
-
-# Jetson / device artifacts (do NOT commit /dev nodes)
-/dev/
-
-# Misc
-coverage.xml
-report.xml
+recordings/
+maps/
+data/calibrations/*
+data/logs/*
+data/maps/*
+data/recordings/*
+!data/calibrations/.gitkeep
+!data/logs/.gitkeep
+!data/maps/.gitkeep
+!data/recordings/.gitkeep
+runtime/*
+!runtime/README.md
+ros_ws/build/
+ros_ws/install/
+ros_ws/log/
+visualizer/node_modules/
+visualizer/dist/
+visualizer/test-output/

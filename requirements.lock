@@ -1,0 +1,18 @@
+# Project-local Python runtime for CPython 3.10 on Jetson aarch64.
+# Every package is mirrored under vendor/python for offline installation.
+exceptiongroup==1.3.1
+fastcrc==0.3.6
+iniconfig==2.3.0
+lxml==6.1.1
+numpy==1.26.4
+packaging==26.2
+Pillow==11.3.0
+pluggy==1.6.0
+Pygments==2.20.0
+pymavlink==2.4.49
+pyrealsense2==2.57.7.10387
+pyserial==3.5
+pytest==9.1.0
+PyYAML==6.0.3
+tomli==2.4.1
+typing_extensions==4.16.0
