@@ -449,6 +449,107 @@ input {
   margin-top: 5px;
 }
 
+.ros-imu-panel {
+  position: fixed;
+  z-index: 10;
+  top: 252px;
+  right: 20px;
+  width: 316px;
+  height: 224px;
+  display: grid;
+  grid-template-rows: 35px minmax(0, 1fr) 42px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(22, 25, 23, 0.94);
+  backdrop-filter: blur(12px);
+}
+
+.ros-imu-heading,
+.ros-imu-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.ros-imu-heading {
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.ros-imu-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ros-imu-link i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.ros-imu-link i.is-live {
+  background: var(--green);
+}
+
+.ros-imu-link i.is-stale {
+  background: var(--amber);
+}
+
+.ros-imu-link strong {
+  max-width: 92px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#rosImuScene {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.ros-imu-footer {
+  gap: 10px;
+  border-top: 1px solid var(--line-soft);
+  background: rgba(17, 19, 18, 0.84);
+}
+
+.ros-imu-attitude {
+  display: flex;
+  min-width: 0;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.ros-imu-attitude strong {
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ros-imu-meta {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .axis-legend {
   position: fixed;
   z-index: 8;
@@ -715,12 +816,39 @@ input[type="range"] {
     display: none;
   }
 
-  .axis-legend {
+  .ros-imu-panel {
     top: 68px;
     right: 10px;
+    width: 176px;
+    height: 164px;
+    grid-template-rows: 30px minmax(0, 1fr) 38px;
+  }
+
+  .ros-imu-heading,
+  .ros-imu-footer {
+    padding: 0 8px;
+  }
+
+  .ros-imu-attitude {
+    gap: 6px;
+    font-size: 8px;
+  }
+
+  .ros-imu-attitude strong {
+    font-size: 9px;
+  }
+
+  .ros-imu-meta {
+    font-size: 7px;
+  }
+
+  .axis-legend {
+    top: 68px;
+    right: auto;
     bottom: auto;
+    left: 10px;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: flex-start;
     gap: 7px;
   }
 

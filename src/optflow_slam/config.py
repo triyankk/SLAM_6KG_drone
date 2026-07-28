@@ -14,6 +14,16 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class CubeMountConfig:
+    x_m: float
+    y_m: float
+    z_m: float
+    yaw_ccw_deg: float
+    ahrs_orientation: int
+    ahrs_orientation_name: str
+
+
+@dataclass(frozen=True)
 class FlightControllerConfig:
     endpoint: str
     baud: int
@@ -22,6 +32,7 @@ class FlightControllerConfig:
     heartbeat_timeout_s: float
     sample_window_s: float
     hflow_min_bench_quality: int
+    cube_mount: CubeMountConfig
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,8 @@ class ImuConfig:
     symlink: str
     usb_vid: int
     usb_pid: int
+    baud: int
+    expected_rate_hz: float
 
 
 @dataclass(frozen=True)
@@ -140,6 +153,8 @@ def load_config(path: str | Path) -> ProjectConfig:
         raise ConfigError("unsupported schema_version")
 
     fc = _mapping(raw, "flight_controller")
+    cube_mount = _mapping(fc, "cube_mount")
+    cube_position = _mapping(cube_mount, "position_from_cg_frd_m")
     sensors = _mapping(raw, "sensors")
     camera = _mapping(sensors, "depth_camera")
     imu = _mapping(sensors, "external_imu")
@@ -209,6 +224,18 @@ def load_config(path: str | Path) -> ProjectConfig:
             hflow_min_bench_quality=int(
                 _required(fc, "hflow_min_bench_quality")
             ),
+            cube_mount=CubeMountConfig(
+                x_m=float(_required(cube_position, "x")),
+                y_m=float(_required(cube_position, "y")),
+                z_m=float(_required(cube_position, "z")),
+                yaw_ccw_deg=float(_required(cube_mount, "yaw_ccw_deg")),
+                ahrs_orientation=int(
+                    _required(cube_mount, "ahrs_orientation")
+                ),
+                ahrs_orientation_name=str(
+                    _required(cube_mount, "ahrs_orientation_name")
+                ),
+            ),
         ),
         depth_camera=DepthCameraConfig(
             model=str(_required(camera, "model")),
@@ -231,6 +258,11 @@ def load_config(path: str | Path) -> ProjectConfig:
             symlink=str(_required(imu, "symlink")),
             usb_vid=int(_required(imu, "usb_vid")),
             usb_pid=int(_required(imu, "usb_pid")),
+            baud=int(_positive(_required(imu, "baud"), "external_imu.baud")),
+            expected_rate_hz=_positive(
+                _required(imu, "expected_rate_hz"),
+                "external_imu.expected_rate_hz",
+            ),
         ),
         lidar=LidarConfig(
             model=str(_required(lidar, "model")),

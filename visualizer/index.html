@@ -8,9 +8,9 @@
     />
     <meta
       name="description"
-      content="Live Cube and H-Flow optical-flow instrument"
+      content="Live Cube, H-Flow, and external IMU motion instrument"
     />
-    <title>H-Flow 3D Visualizer</title>
+    <title>Drone Motion Visualizer</title>
   </head>
   <body>
     <main id="app">
@@ -18,8 +18,8 @@
 
       <header class="topbar">
         <div class="identity">
-          <span class="product-name">H-FLOW</span>
-          <span class="product-subtitle">3D optical-flow instrument</span>
+          <span class="product-name">DRONE MOTION</span>
+          <span class="product-subtitle">Cube + optical flow + ROS IMU</span>
         </div>
         <div class="link-cluster">
           <span id="sourceBadge" class="source-badge">WAIT</span>
@@ -167,6 +167,10 @@
             <span>Cube</span>
             <strong id="systemValue">--</strong>
           </div>
+          <div class="metric-row">
+            <span>Cube mount</span>
+            <strong id="cubeMountValue">--</strong>
+          </div>
           <p id="linkDetail" class="link-detail">Waiting for telemetry</p>
         </section>
       </aside>
@@ -180,6 +184,31 @@
           </span>
         </div>
         <canvas id="traceCanvas" width="600" height="220"></canvas>
+      </section>
+
+      <section class="ros-imu-panel" aria-label="External ROS IMU motion">
+        <div class="ros-imu-heading">
+          <span>ROS IMU</span>
+          <span class="ros-imu-link">
+            <i id="rosImuIndicator" aria-hidden="true"></i>
+            <strong id="rosImuStatus">WAIT</strong>
+          </span>
+        </div>
+        <canvas
+          id="rosImuScene"
+          aria-label="Live external IMU orientation"
+        ></canvas>
+        <div class="ros-imu-footer">
+          <div class="ros-imu-attitude">
+            <span>R <strong id="rosRollValue">0.0</strong></span>
+            <span>P <strong id="rosPitchValue">0.0</strong></span>
+            <span>Y <strong id="rosYawValue">0.0</strong></span>
+          </div>
+          <div class="ros-imu-meta">
+            <span id="rosImuRate">0.0 Hz</span>
+            <span id="rosImuAge">-- ms</span>
+          </div>
+        </div>
       </section>
 
       <div class="axis-legend" aria-label="Aircraft body axes">

@@ -14,6 +14,7 @@ usage() {
         "  test        Run Python tests and the frontend build" \
         "  preflight   Run the read-only hardware readiness probe" \
         "  camera      Start the forward RealSense RGB stream" \
+        "  cube-mount  Inspect/apply the measured Cube mounting transform" \
         "  build-ch341 Build the CH340/CH341 USB serial kernel driver" \
         "  install-ch341 Install the driver and IMU udev rule as root" \
         "  install-headless-vnc Install the reversible headless X/VNC setup" \
@@ -55,6 +56,10 @@ case "${command}" in
     camera)
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/rgb_stream.py" "$@"
+        ;;
+    cube-mount)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/configure_cube_mount.py" "$@"
         ;;
     build-ch341)
         make -C "${ROOT_DIR}/hardware/kernel/ch341" "$@"

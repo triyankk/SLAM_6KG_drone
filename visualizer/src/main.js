@@ -25,6 +25,7 @@ const icons = {
 };
 
 const canvas = document.querySelector("#scene");
+const rosImuCanvas = document.querySelector("#rosImuScene");
 const traceCanvas = document.querySelector("#traceCanvas");
 const traceContext = traceCanvas.getContext("2d");
 
@@ -60,6 +61,14 @@ const elements = {
   imuSource: document.querySelector("#imuSource"),
   modeValue: document.querySelector("#modeValue"),
   systemValue: document.querySelector("#systemValue"),
+  cubeMountValue: document.querySelector("#cubeMountValue"),
+  rosImuIndicator: document.querySelector("#rosImuIndicator"),
+  rosImuStatus: document.querySelector("#rosImuStatus"),
+  rosRollValue: document.querySelector("#rosRollValue"),
+  rosPitchValue: document.querySelector("#rosPitchValue"),
+  rosYawValue: document.querySelector("#rosYawValue"),
+  rosImuRate: document.querySelector("#rosImuRate"),
+  rosImuAge: document.querySelector("#rosImuAge"),
   pauseButton: document.querySelector("#pauseButton"),
   resetButton: document.querySelector("#resetButton"),
   perspectiveButton: document.querySelector("#perspectiveButton"),
@@ -92,8 +101,31 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+const rosImuRenderer = new THREE.WebGLRenderer({
+  canvas: rosImuCanvas,
+  antialias: true,
+  alpha: false,
+  preserveDrawingBuffer: true,
+  powerPreference: "high-performance",
+});
+rosImuRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+rosImuRenderer.setClearColor(0x171a18, 1);
+rosImuRenderer.outputColorSpace = THREE.SRGBColorSpace;
+rosImuRenderer.shadowMap.enabled = true;
+rosImuRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x111312, 0.048);
+
+const rosImuScene = new THREE.Scene();
+const rosImuCamera = new THREE.PerspectiveCamera(38, 1, 0.02, 20);
+rosImuCamera.position.set(2.2, 1.35, 2.35);
+rosImuCamera.lookAt(0, 0, 0);
+rosImuScene.add(new THREE.HemisphereLight(0xf2f5f3, 0x20231f, 2.4));
+const rosImuLight = new THREE.DirectionalLight(0xffffff, 2.8);
+rosImuLight.position.set(2.5, 3.5, 2);
+rosImuLight.castShadow = true;
+rosImuScene.add(rosImuLight);
 
 const camera = new THREE.PerspectiveCamera(
   43,
@@ -182,6 +214,34 @@ function buildDrone() {
   cap.position.set(-0.02, 0.105, 0);
   group.add(cap);
 
+  const cubeGroup = new THREE.Group();
+  cubeGroup.name = "cube-orange";
+  const cubeBody = box(
+    0.12,
+    0.035,
+    0.1,
+    new THREE.MeshStandardMaterial({
+      color: 0xe8792f,
+      emissive: 0x4d1c08,
+      emissiveIntensity: 0.5,
+      roughness: 0.38,
+      metalness: 0.25,
+    }),
+  );
+  const cubeArrow = box(
+    0.045,
+    0.01,
+    0.018,
+    new THREE.MeshStandardMaterial({
+      color: 0xf7f8f7,
+      emissive: 0x555b58,
+      emissiveIntensity: 0.35,
+    }),
+  );
+  cubeArrow.position.set(0.045, 0.023, 0);
+  cubeGroup.add(cubeBody, cubeArrow);
+  group.add(cubeGroup);
+
   const armLength = 0.72;
   const armA = box(armLength, 0.045, 0.055, frameMaterial);
   armA.rotation.y = Math.PI / 4;
@@ -255,6 +315,89 @@ function buildDrone() {
 const drone = buildDrone();
 scene.add(drone);
 const flowSensor = drone.getObjectByName("hflow-sensor");
+const cubeOrange = drone.getObjectByName("cube-orange");
+
+function buildRosImuRig() {
+  const group = new THREE.Group();
+  const board = box(
+    1.08,
+    0.16,
+    0.72,
+    new THREE.MeshStandardMaterial({
+      color: 0x2d756f,
+      roughness: 0.3,
+      metalness: 0.48,
+    }),
+  );
+  const module = box(
+    0.36,
+    0.12,
+    0.3,
+    new THREE.MeshStandardMaterial({
+      color: 0xdce3df,
+      roughness: 0.4,
+      metalness: 0.25,
+    }),
+  );
+  module.position.y = 0.13;
+  const forwardMark = box(
+    0.25,
+    0.035,
+    0.1,
+    new THREE.MeshStandardMaterial({
+      color: 0xf0b44b,
+      emissive: 0x5b3a09,
+      emissiveIntensity: 0.55,
+    }),
+  );
+  forwardMark.position.set(0.5, 0.115, 0);
+  group.add(board, module, forwardMark);
+
+  const localForward = new THREE.ArrowHelper(
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(0.56, 0, 0),
+    0.42,
+    0xf0b44b,
+    0.12,
+    0.07,
+  );
+  const localRight = new THREE.ArrowHelper(
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, 0.38),
+    0.34,
+    0xd8dedb,
+    0.1,
+    0.06,
+  );
+  group.add(localForward, localRight);
+  return group;
+}
+
+const rosImuRig = buildRosImuRig();
+rosImuScene.add(rosImuRig);
+const rosImuGrid = new THREE.GridHelper(4, 8, 0x49504c, 0x292e2b);
+rosImuGrid.position.y = -0.55;
+rosImuGrid.material.transparent = true;
+rosImuGrid.material.opacity = 0.55;
+rosImuScene.add(rosImuGrid);
+
+const rosAccelArrow = new THREE.ArrowHelper(
+  new THREE.Vector3(0, -1, 0),
+  new THREE.Vector3(-0.25, 0.34, 0),
+  0.72,
+  0x8de06f,
+  0.13,
+  0.075,
+);
+const rosGyroArrow = new THREE.ArrowHelper(
+  new THREE.Vector3(1, 0, 0),
+  new THREE.Vector3(0.25, 0.34, 0),
+  0.5,
+  0x70a5ff,
+  0.12,
+  0.07,
+);
+rosImuScene.add(rosAccelArrow, rosGyroArrow);
 
 const footprint = new THREE.Mesh(
   new THREE.RingGeometry(0.27, 0.285, 64),
@@ -335,12 +478,18 @@ const yawQuaternion = new THREE.Quaternion();
 const pitchQuaternion = new THREE.Quaternion();
 const rollQuaternion = new THREE.Quaternion();
 const attitudeQuaternion = new THREE.Quaternion();
+const rosYawQuaternion = new THREE.Quaternion();
+const rosPitchQuaternion = new THREE.Quaternion();
+const rosRollQuaternion = new THREE.Quaternion();
+const rosAttitudeQuaternion = new THREE.Quaternion();
 const worldFlow = new THREE.Vector3();
 const sensorWorld = new THREE.Vector3();
 const forwardWorld = new THREE.Vector3();
 const rightWorld = new THREE.Vector3();
 const accelWorld = new THREE.Vector3();
 const gyroWorld = new THREE.Vector3();
+const rosAccelWorld = new THREE.Vector3();
+const rosGyroWorld = new THREE.Vector3();
 const bodyForward = new THREE.Vector3(1, 0, 0);
 const bodyRight = new THREE.Vector3(0, 0, 1);
 const rangePositions = rangeLineGeometry.attributes.position.array;
@@ -400,6 +549,11 @@ function radiansToDegrees(value) {
   return (finite(value) * 180) / Math.PI;
 }
 
+function signedCentimeters(value) {
+  const centimeters = Math.round(finite(value) * 100);
+  return `${centimeters >= 0 ? "+" : ""}${centimeters}`;
+}
+
 function qualityColor(quality) {
   if (quality >= 150) return "#8de06f";
   if (quality >= 70) return "#f0b44b";
@@ -411,6 +565,8 @@ function updateTelemetryUi(data) {
   const range = data.range;
   const attitude = data.attitude;
   const imu = data.imu ?? {};
+  const rosImu = data.ros_imu ?? {};
+  const cubeMount = data.cube_mount ?? {};
   const vehicle = data.vehicle;
   const linkAge = data.link.age_ms;
   const streamFresh =
@@ -490,18 +646,55 @@ function updateTelemetryUi(data) {
     vehicle.system_id === null
       ? "--"
       : `${vehicle.system_id}:${vehicle.component_id}`;
+  elements.cubeMountValue.textContent =
+    `${signedCentimeters(cubeMount.x_m)}F ` +
+    `${signedCentimeters(-finite(cubeMount.z_m))}U ` +
+    `${cubeMount.ahrs_orientation_name ?? "--"}`;
+
+  const rosAge = rosImu.age_ms;
+  const rosFresh =
+    rosImu.connected && rosAge !== null && rosAge < 500;
+  elements.rosImuIndicator.classList.toggle("is-live", rosFresh);
+  elements.rosImuIndicator.classList.toggle(
+    "is-stale",
+    rosImu.connected && !rosFresh,
+  );
+  elements.rosImuStatus.textContent = rosFresh
+    ? "LIVE"
+    : rosImu.connected
+      ? "STALE"
+      : "OFFLINE";
+  elements.rosRollValue.textContent =
+    radiansToDegrees(rosImu.roll_rad).toFixed(1);
+  elements.rosPitchValue.textContent =
+    radiansToDegrees(rosImu.pitch_rad).toFixed(1);
+  elements.rosYawValue.textContent =
+    radiansToDegrees(rosImu.yaw_rad).toFixed(1);
+  elements.rosImuRate.textContent =
+    `${finite(rosImu.sample_rate_hz).toFixed(1)} Hz`;
+  elements.rosImuAge.textContent = formatAge(rosAge);
 }
 
 function updateScene(data, deltaSeconds) {
   const flow = data.flow;
   const attitude = data.attitude;
   const imu = data.imu ?? {};
+  const cubeMount = data.cube_mount ?? {};
   const measuredRange = finite(data.range.distance_m);
   const altitude = THREE.MathUtils.clamp(measuredRange + 0.1, 0.14, 5.5);
   const attitudeBlend =
     1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.014);
   const altitudeBlend =
     1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.07);
+
+  cubeOrange.position.set(
+    finite(cubeMount.x_m),
+    -finite(cubeMount.z_m),
+    finite(cubeMount.y_m),
+  );
+  cubeOrange.rotation.y = THREE.MathUtils.degToRad(
+    finite(cubeMount.yaw_ccw_deg),
+  );
 
   yawQuaternion.setFromAxisAngle(
     new THREE.Vector3(0, 1, 0),
@@ -627,6 +820,73 @@ function updateScene(data, deltaSeconds) {
   }
 }
 
+function updateRosImuScene(data, deltaSeconds) {
+  const rosImu = data.ros_imu ?? {};
+  if (rosImu.age_ms === null || rosImu.age_ms === undefined) return;
+
+  const blend =
+    1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.025);
+  rosYawQuaternion.setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    -finite(rosImu.yaw_rad),
+  );
+  rosPitchQuaternion.setFromAxisAngle(
+    new THREE.Vector3(0, 0, 1),
+    finite(rosImu.pitch_rad),
+  );
+  rosRollQuaternion.setFromAxisAngle(
+    new THREE.Vector3(1, 0, 0),
+    finite(rosImu.roll_rad),
+  );
+  rosAttitudeQuaternion
+    .copy(rosYawQuaternion)
+    .multiply(rosPitchQuaternion)
+    .multiply(rosRollQuaternion);
+  rosImuRig.quaternion.slerp(rosAttitudeQuaternion, blend);
+
+  rosAccelWorld
+    .set(
+      finite(rosImu.accel_x_mss),
+      -finite(rosImu.accel_z_mss),
+      finite(rosImu.accel_y_mss),
+    )
+    .applyQuaternion(rosAttitudeQuaternion);
+  const accelLength = rosAccelWorld.length();
+  if (accelLength > 0.02) {
+    rosAccelWorld.normalize();
+    rosAccelArrow.setDirection(rosAccelWorld);
+    rosAccelArrow.setLength(
+      THREE.MathUtils.clamp(accelLength * 0.07, 0.25, 0.95),
+      0.13,
+      0.075,
+    );
+    rosAccelArrow.visible = true;
+  } else {
+    rosAccelArrow.visible = false;
+  }
+
+  rosGyroWorld
+    .set(
+      finite(rosImu.gyro_x_rads),
+      -finite(rosImu.gyro_z_rads),
+      finite(rosImu.gyro_y_rads),
+    )
+    .applyQuaternion(rosAttitudeQuaternion);
+  const gyroLength = rosGyroWorld.length();
+  if (gyroLength > 0.002) {
+    rosGyroWorld.normalize();
+    rosGyroArrow.setDirection(rosGyroWorld);
+    rosGyroArrow.setLength(
+      THREE.MathUtils.clamp(gyroLength * 1.7, 0.2, 0.8),
+      0.12,
+      0.07,
+    );
+    rosGyroArrow.visible = true;
+  } else {
+    rosGyroArrow.visible = false;
+  }
+}
+
 function appendHistory(data) {
   const now = performance.now() / 1000;
   flowHistory.push({
@@ -702,8 +962,18 @@ function captureRecording(data) {
     gyro_x_rads: finite(data.imu?.gyro_x_rads),
     gyro_y_rads: finite(data.imu?.gyro_y_rads),
     gyro_z_rads: finite(data.imu?.gyro_z_rads),
+    ros_imu_roll_rad: finite(data.ros_imu?.roll_rad),
+    ros_imu_pitch_rad: finite(data.ros_imu?.pitch_rad),
+    ros_imu_yaw_rad: finite(data.ros_imu?.yaw_rad),
+    ros_imu_accel_x_mss: finite(data.ros_imu?.accel_x_mss),
+    ros_imu_accel_y_mss: finite(data.ros_imu?.accel_y_mss),
+    ros_imu_accel_z_mss: finite(data.ros_imu?.accel_z_mss),
+    ros_imu_gyro_x_rads: finite(data.ros_imu?.gyro_x_rads),
+    ros_imu_gyro_y_rads: finite(data.ros_imu?.gyro_y_rads),
+    ros_imu_gyro_z_rads: finite(data.ros_imu?.gyro_z_rads),
     flow_age_ms: data.flow.age_ms ?? "",
     imu_age_ms: data.imu?.age_ms ?? "",
+    ros_imu_age_ms: data.ros_imu?.age_ms ?? "",
   });
   elements.downloadButton.disabled = recordedRows.length === 0;
 }
@@ -792,9 +1062,17 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(displayPixelRatio());
   renderer.setSize(width, height, false);
+
+  const rosWidth = Math.max(1, rosImuCanvas.clientWidth);
+  const rosHeight = Math.max(1, rosImuCanvas.clientHeight);
+  rosImuCamera.aspect = rosWidth / rosHeight;
+  rosImuCamera.updateProjectionMatrix();
+  rosImuRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+  rosImuRenderer.setSize(rosWidth, rosHeight, false);
 }
 
 window.addEventListener("resize", resize);
+resize();
 
 function animate(frameTime) {
   requestAnimationFrame(animate);
@@ -806,10 +1084,12 @@ function animate(frameTime) {
       lastUiSequence = displayTelemetry.sequence;
     }
     updateScene(displayTelemetry, deltaSeconds);
+    updateRosImuScene(displayTelemetry, deltaSeconds);
   }
   if (traceDirty) drawTrace();
   controls.update();
   renderer.render(scene, camera);
+  rosImuRenderer.render(rosImuScene, rosImuCamera);
 }
 
 requestAnimationFrame(animate);

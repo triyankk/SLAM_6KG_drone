@@ -19,6 +19,14 @@ Props removed unless a test explicitly requires thrust.
 9. Configure the requested RC disarm switch only after the operator toggles the
    intended transmitter channel during an interactive assignment.
 
+Measured Cube mounting revision:
+
+- Cube center is `+0.08 m` forward and `-0.08 m` down (8 cm above) from CG.
+- Cube arrow points left, which is ArduPilot `Yaw270`.
+- Run `./optflow cube-mount` to inspect and
+  `./optflow cube-mount --apply` to back up, write, and verify the parameters.
+- Re-run accelerometer calibration after applying the mounting revision.
+
 Exit:
 
 - No loose wiring or unknown motor direction.

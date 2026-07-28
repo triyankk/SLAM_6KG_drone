@@ -13,6 +13,10 @@ def test_default_config_is_conservative() -> None:
 
     assert config.flight_controller.endpoint == "/dev/ttyTHS1"
     assert config.flight_controller.baud == 921600
+    assert config.flight_controller.cube_mount.x_m == 0.08
+    assert config.flight_controller.cube_mount.y_m == 0.0
+    assert config.flight_controller.cube_mount.z_m == -0.08
+    assert config.flight_controller.cube_mount.ahrs_orientation == 6
     assert config.depth_camera.model == "Intel RealSense D415"
     assert config.depth_camera.serial == "327322062285"
     assert config.depth_camera.stream_port == 8770
@@ -20,6 +24,8 @@ def test_default_config_is_conservative() -> None:
     assert not config.navigation.external_nav_to_cube_enabled
     assert not config.safety.standard_rtl_allowed_without_global_position
     assert "STABILIZE" in config.safety.forbidden_modes
+    assert config.external_imu.baud == 9600
+    assert config.external_imu.expected_rate_hz == 10
 
 
 def test_external_nav_cannot_be_enabled_without_control(tmp_path: Path) -> None:

@@ -70,16 +70,22 @@ Show all currently missing SLAM hardware:
 ./optflow preflight --profile slam_bench
 ```
 
-Run the live H-Flow 3D visualizer:
+Run the live drone-motion visualizer:
 
 ```bash
 ./optflow visualizer --host 0.0.0.0
 ```
 
 Open `http://127.0.0.1:8765` on the Jetson or use the Jetson's LAN address from
-another device. The visualizer owns `/dev/ttyTHS1` while it runs, so stop it
-before starting another direct-UART process. Use `--demo` to exercise the UI
-without opening the Cube link.
+another device. The main aircraft view uses Cube attitude, Cube IMU, H-Flow, and
+range data. The corner view animates the external IM10A using the future
+`sensor_msgs/Imu` contract. Until ROS 2 is installed, that stream is decoded
+directly from `/dev/imu_usb` and is explicitly marked as having unverified body
+extrinsics.
+
+The visualizer owns both `/dev/ttyTHS1` and `/dev/imu_usb` while it runs, so
+stop it before starting another direct sensor process. Use `--demo` to exercise
+both views without opening either hardware link.
 
 Run the forward RealSense RGB stream:
 

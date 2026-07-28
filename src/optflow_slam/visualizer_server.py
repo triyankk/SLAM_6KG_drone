@@ -17,16 +17,23 @@ import time
 from typing import Any
 import webbrowser
 
-from .paths import VISUALIZER_DIR
+from .config import ConfigError, load_config
+from .im10a import Im10aDecoder
+from .paths import CONFIG_DIR, VISUALIZER_DIR
 
 
 DEFAULT_STATIC_DIR = VISUALIZER_DIR / "dist"
+DEFAULT_CONFIG = CONFIG_DIR / "system.yaml"
 
 
 class TelemetryStore:
     """Thread-safe latest-value store with per-stream freshness."""
 
-    def __init__(self, source: str) -> None:
+    def __init__(
+        self,
+        source: str,
+        cube_mount: dict[str, Any] | None = None,
+    ) -> None:
         now = time.monotonic()
         self._lock = threading.Lock()
         self._state: dict[str, Any] = {
@@ -76,6 +83,36 @@ class TelemetryStore:
                 "message": "WAITING",
                 "updated_monotonic": None,
             },
+            "ros_imu": {
+                "connected": False,
+                "detail": "Waiting for IM10A",
+                "transport": "serial-direct",
+                "contract": "sensor_msgs/Imu",
+                "frame_id": "im10a_link",
+                "extrinsics_verified": False,
+                "sample_rate_hz": 0.0,
+                "checksum_errors": 0,
+                "accel_x_mss": 0.0,
+                "accel_y_mss": 0.0,
+                "accel_z_mss": 0.0,
+                "gyro_x_rads": 0.0,
+                "gyro_y_rads": 0.0,
+                "gyro_z_rads": 0.0,
+                "roll_rad": 0.0,
+                "pitch_rad": 0.0,
+                "yaw_rad": 0.0,
+                "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "updated_monotonic": None,
+            },
+            "cube_mount": cube_mount
+            or {
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "yaw_ccw_deg": 0.0,
+                "ahrs_orientation": 0,
+                "ahrs_orientation_name": "None",
+            },
             "started_monotonic": now,
         }
 
@@ -112,7 +149,7 @@ class TelemetryStore:
         state["link"]["age_ms"] = age_ms(
             state["link"].pop("last_packet_monotonic")
         )
-        for section in ("flow", "range", "attitude", "imu"):
+        for section in ("flow", "range", "attitude", "imu", "ros_imu"):
             state[section]["age_ms"] = age_ms(
                 state[section].pop("updated_monotonic")
             )
@@ -184,11 +221,11 @@ class MavlinkSource(threading.Thread):
             return
 
         message_intervals = {
+            mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE: 50_000,
             mavutil.mavlink.MAVLINK_MSG_ID_OPTICAL_FLOW: 50_000,
             mavutil.mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR: 50_000,
             mavutil.mavlink.MAVLINK_MSG_ID_HIGHRES_IMU: 20_000,
             mavutil.mavlink.MAVLINK_MSG_ID_RAW_IMU: 20_000,
-            mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE: 50_000,
         }
         while not self.stop_event.is_set():
             master = None
@@ -356,6 +393,117 @@ class MavlinkSource(threading.Thread):
             )
 
 
+class Im10aSource(threading.Thread):
+    """Read the external IM10A into the future ROS IMU contract."""
+
+    def __init__(
+        self,
+        store: TelemetryStore,
+        stop_event: threading.Event,
+        endpoint: str,
+        baud: int,
+    ) -> None:
+        super().__init__(name="im10a-serial", daemon=True)
+        self.store = store
+        self.stop_event = stop_event
+        self.endpoint = endpoint
+        self.baud = baud
+
+    def run(self) -> None:
+        try:
+            import serial
+        except ImportError as exc:
+            self.store.update(
+                "ros_imu",
+                connected=False,
+                detail=f"pyserial unavailable: {exc}",
+            )
+            return
+
+        while not self.stop_event.is_set():
+            port = None
+            try:
+                self.store.update(
+                    "ros_imu",
+                    connected=False,
+                    detail=f"Connecting to {self.endpoint} at {self.baud}",
+                )
+                port = serial.Serial(
+                    self.endpoint,
+                    self.baud,
+                    timeout=0.25,
+                    exclusive=True,
+                )
+                port.reset_input_buffer()
+                decoder = Im10aDecoder()
+                quaternion_frames = 0
+                rate_started = time.monotonic()
+                while not self.stop_event.is_set():
+                    data = port.read(max(1, port.in_waiting))
+                    if not data:
+                        continue
+                    for measurement in decoder.feed(data):
+                        now = time.monotonic()
+                        common = {
+                            "connected": True,
+                            "detail": "Receiving IM10A serial",
+                            "checksum_errors": decoder.checksum_errors,
+                            "updated_monotonic": now,
+                        }
+                        if measurement.kind == "accel_mss":
+                            x, y, z = measurement.values
+                            self.store.update(
+                                "ros_imu",
+                                **common,
+                                accel_x_mss=x,
+                                accel_y_mss=y,
+                                accel_z_mss=z,
+                            )
+                        elif measurement.kind == "gyro_rads":
+                            x, y, z = measurement.values
+                            self.store.update(
+                                "ros_imu",
+                                **common,
+                                gyro_x_rads=x,
+                                gyro_y_rads=y,
+                                gyro_z_rads=z,
+                            )
+                        elif measurement.kind == "euler_rad":
+                            roll, pitch, yaw = measurement.values
+                            self.store.update(
+                                "ros_imu",
+                                **common,
+                                roll_rad=roll,
+                                pitch_rad=pitch,
+                                yaw_rad=yaw,
+                            )
+                        elif measurement.kind == "quaternion_wxyz":
+                            quaternion_frames += 1
+                            elapsed = now - rate_started
+                            rate_hz = 0.0
+                            if elapsed >= 1.0:
+                                rate_hz = quaternion_frames / elapsed
+                                quaternion_frames = 0
+                                rate_started = now
+                            values: dict[str, Any] = {
+                                **common,
+                                "quaternion_wxyz": list(measurement.values),
+                            }
+                            if rate_hz > 0:
+                                values["sample_rate_hz"] = rate_hz
+                            self.store.update("ros_imu", **values)
+            except (OSError, serial.SerialException, ValueError) as exc:
+                self.store.update(
+                    "ros_imu",
+                    connected=False,
+                    detail=str(exc),
+                )
+                self.stop_event.wait(2.0)
+            finally:
+                if port is not None:
+                    port.close()
+
+
 class DemoSource(threading.Thread):
     """Deterministic animated telemetry for UI and screenshot validation."""
 
@@ -417,6 +565,23 @@ class DemoSource(threading.Thread):
                 gyro_y_rads=-0.038 * math.sin(phase * 0.43),
                 gyro_z_rads=0.08,
                 message="DEMO_IMU",
+                updated_monotonic=now,
+            )
+            self.store.update(
+                "ros_imu",
+                connected=True,
+                detail="Demo ROS IMU",
+                sample_rate_hz=40.0,
+                checksum_errors=0,
+                accel_x_mss=0.5 * math.sin(phase * 0.74),
+                accel_y_mss=0.3 * math.cos(phase * 0.61),
+                accel_z_mss=9.80665,
+                gyro_x_rads=0.12 * math.cos(phase * 0.36),
+                gyro_y_rads=0.08 * math.sin(phase * 0.41),
+                gyro_z_rads=0.1,
+                roll_rad=math.radians(14.0) * math.sin(phase * 0.36),
+                pitch_rad=math.radians(9.0) * math.cos(phase * 0.41),
+                yaw_rad=(phase * 0.1) % (2.0 * math.pi),
                 updated_monotonic=now,
             )
 
@@ -486,8 +651,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--serial", default="/dev/ttyTHS1")
-    parser.add_argument("--baud", type=int, default=921600)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--serial")
+    parser.add_argument("--baud", type=int)
+    parser.add_argument("--external-imu")
+    parser.add_argument("--external-imu-baud", type=int)
+    parser.add_argument("--no-external-imu", action="store_true")
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--static-dir", type=Path, default=DEFAULT_STATIC_DIR)
@@ -496,6 +665,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    try:
+        config = load_config(args.config)
+    except (ConfigError, OSError) as exc:
+        print(f"Configuration error: {exc}")
+        return 2
     static_dir = args.static_dir.resolve()
     if not (static_dir / "index.html").exists():
         print(
@@ -505,14 +679,42 @@ def main() -> int:
         return 2
 
     stop_event = threading.Event()
-    store = TelemetryStore("demo" if args.demo else "cube_uart")
+    mount = config.flight_controller.cube_mount
+    store = TelemetryStore(
+        "demo" if args.demo else "cube_uart",
+        cube_mount={
+            "x_m": mount.x_m,
+            "y_m": mount.y_m,
+            "z_m": mount.z_m,
+            "yaw_ccw_deg": mount.yaw_ccw_deg,
+            "ahrs_orientation": mount.ahrs_orientation,
+            "ahrs_orientation_name": mount.ahrs_orientation_name,
+        },
+    )
     if args.demo:
-        source: threading.Thread = DemoSource(store, stop_event)
+        sources: list[threading.Thread] = [DemoSource(store, stop_event)]
     else:
-        source = MavlinkSource(
-            store, stop_event, endpoint=args.serial, baud=args.baud
-        )
-    source.start()
+        sources = [
+            MavlinkSource(
+                store,
+                stop_event,
+                endpoint=args.serial or config.flight_controller.endpoint,
+                baud=args.baud or config.flight_controller.baud,
+            )
+        ]
+        if not args.no_external_imu:
+            sources.append(
+                Im10aSource(
+                    store,
+                    stop_event,
+                    endpoint=args.external_imu
+                    or config.external_imu.symlink,
+                    baud=args.external_imu_baud
+                    or config.external_imu.baud,
+                )
+            )
+    for source in sources:
+        source.start()
 
     handler = make_handler(store, static_dir)
     server = ThreadingHTTPServer((args.host, args.port), handler)
@@ -539,7 +741,8 @@ def main() -> int:
     finally:
         stop_event.set()
         server.server_close()
-        source.join(timeout=2.0)
+        for source in sources:
+            source.join(timeout=2.0)
     return 0
 
 

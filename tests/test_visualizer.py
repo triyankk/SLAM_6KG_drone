@@ -3,6 +3,7 @@ from threading import Event
 from types import SimpleNamespace
 
 from optflow_slam.visualizer_server import (
+    Im10aSource,
     MavlinkSource,
     TelemetryStore,
     _set_message_interval,
@@ -139,3 +140,23 @@ def test_extended_optical_flow_message_prefers_float_rate_fields() -> None:
     assert snapshot["flow"]["rate_x_rads"] == 0.125
     assert snapshot["flow"]["rate_y_rads"] == -0.25
     assert snapshot["flow"]["quality"] == 201
+
+
+def test_ros_imu_snapshot_has_explicit_unverified_extrinsics() -> None:
+    store = TelemetryStore("test")
+    snapshot = store.snapshot()
+
+    assert snapshot["ros_imu"]["contract"] == "sensor_msgs/Imu"
+    assert snapshot["ros_imu"]["frame_id"] == "im10a_link"
+    assert not snapshot["ros_imu"]["extrinsics_verified"]
+    assert snapshot["ros_imu"]["age_ms"] is None
+
+
+def test_im10a_source_is_a_separate_telemetry_thread() -> None:
+    source = Im10aSource(
+        TelemetryStore("test"), Event(), "/dev/imu_usb", 9600
+    )
+
+    assert source.name == "im10a-serial"
+    assert source.endpoint == "/dev/imu_usb"
+    assert source.baud == 9600

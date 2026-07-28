@@ -12,6 +12,14 @@ flight_controller:
   heartbeat_timeout_s: 5.0
   sample_window_s: 3.0
   hflow_min_bench_quality: 1
+  cube_mount:
+    position_from_cg_frd_m:
+      x: 0.08
+      y: 0.00
+      z: -0.08
+    yaw_ccw_deg: 90
+    ahrs_orientation: 6
+    ahrs_orientation_name: Yaw270
   hflow:
     transport: DroneCAN
     port: CAN2
@@ -36,6 +44,8 @@ sensors:
     symlink: /dev/imu_usb
     usb_vid: 0x1A86
     usb_pid: 0x7523
+    baud: 9600
+    expected_rate_hz: 10
   lidar:
     model: HESAI_JT16_MINI
     lidar_ip: 192.168.1.201
