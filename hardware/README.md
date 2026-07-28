@@ -18,3 +18,16 @@ sudo ./optflow install-ch341
 
 After installation, reconnecting the IMU should create `/dev/imu_usb`
 automatically. Kernel modules must not be loaded from another workspace folder.
+
+The Jetson headless display and VNC configuration is also kept here. Follow
+[`docs/HEADLESS_ACCESS.md`](../docs/HEADLESS_ACCESS.md) before enclosing the
+computer. The short form is:
+
+```bash
+x11vnc -storepasswd
+sudo ./optflow install-headless-vnc
+./optflow check-headless-vnc
+```
+
+The installer captures the current system configuration before replacing it.
+It does not restart the display manager or reboot the Jetson.

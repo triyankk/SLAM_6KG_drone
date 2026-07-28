@@ -16,6 +16,8 @@ usage() {
         "  camera      Start the forward RealSense RGB stream" \
         "  build-ch341 Build the CH340/CH341 USB serial kernel driver" \
         "  install-ch341 Install the driver and IMU udev rule as root" \
+        "  install-headless-vnc Install the reversible headless X/VNC setup" \
+        "  check-headless-vnc Verify the local X display and VNC listener" \
         "  visualizer  Start the live H-Flow visualizer"
 }
 
@@ -59,6 +61,12 @@ case "${command}" in
         ;;
     install-ch341)
         exec "${ROOT_DIR}/hardware/install-ch341.sh" "$@"
+        ;;
+    install-headless-vnc)
+        exec "${ROOT_DIR}/hardware/install-headless-vnc.sh" "$@"
+        ;;
+    check-headless-vnc)
+        exec "${ROOT_DIR}/hardware/check-headless-vnc.sh" "$@"
         ;;
     visualizer)
         require_python
