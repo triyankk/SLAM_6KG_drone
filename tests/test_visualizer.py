@@ -1,6 +1,9 @@
 import time
+from threading import Event
+from types import SimpleNamespace
 
 from optflow_slam.visualizer_server import (
+    MavlinkSource,
     TelemetryStore,
     _set_message_interval,
 )
@@ -92,3 +95,47 @@ def test_message_interval_request_waits_for_cube_ack() -> None:
     assert result == 0
     assert master.ack_requested
     assert master.mav.command is not None
+
+
+def test_legacy_optical_flow_message_uses_base_rate_fields() -> None:
+    store = TelemetryStore("test")
+    source = MavlinkSource(store, Event(), "/dev/null", 921600)
+    message = SimpleNamespace(
+        get_type=lambda: "OPTICAL_FLOW",
+        flow_x=2,
+        flow_y=-3,
+        flow_comp_m_x=0.25,
+        flow_comp_m_y=-0.5,
+        quality=137,
+    )
+
+    source._handle_message(message, mavutil=None)
+    snapshot = store.snapshot()
+
+    assert snapshot["flow"]["rate_x_rads"] == 2.0
+    assert snapshot["flow"]["rate_y_rads"] == -3.0
+    assert snapshot["flow"]["comp_x"] == 0.25
+    assert snapshot["flow"]["comp_y"] == -0.5
+    assert snapshot["flow"]["quality"] == 137
+
+
+def test_extended_optical_flow_message_prefers_float_rate_fields() -> None:
+    store = TelemetryStore("test")
+    source = MavlinkSource(store, Event(), "/dev/null", 921600)
+    message = SimpleNamespace(
+        get_type=lambda: "OPTICAL_FLOW",
+        flow_x=2,
+        flow_y=-3,
+        flow_rate_x=0.125,
+        flow_rate_y=-0.25,
+        flow_comp_m_x=0.25,
+        flow_comp_m_y=-0.5,
+        quality=201,
+    )
+
+    source._handle_message(message, mavutil=None)
+    snapshot = store.snapshot()
+
+    assert snapshot["flow"]["rate_x_rads"] == 0.125
+    assert snapshot["flow"]["rate_y_rads"] == -0.25
+    assert snapshot["flow"]["quality"] == 201

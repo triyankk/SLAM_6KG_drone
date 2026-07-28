@@ -239,7 +239,7 @@ class MavlinkSource(threading.Thread):
                         continue
                     self.store.mark_packet()
                     self._handle_message(message, mavutil)
-            except (OSError, RuntimeError, ValueError) as exc:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 self.store.set_link(False, str(exc))
                 self.stop_event.wait(2.0)
             finally:
@@ -304,10 +304,12 @@ class MavlinkSource(threading.Thread):
                 updated_monotonic=now,
             )
         elif message_type == "OPTICAL_FLOW":
+            rate_x = getattr(message, "flow_rate_x", message.flow_x)
+            rate_y = getattr(message, "flow_rate_y", message.flow_y)
             self.store.update(
                 "flow",
-                rate_x_rads=float(message.flow_rate_x),
-                rate_y_rads=float(message.flow_rate_y),
+                rate_x_rads=float(rate_x),
+                rate_y_rads=float(rate_y),
                 comp_x=float(message.flow_comp_m_x),
                 comp_y=float(message.flow_comp_m_y),
                 quality=int(message.quality),
