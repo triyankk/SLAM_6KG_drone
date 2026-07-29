@@ -82,10 +82,8 @@ range data. H-Flow's angular-speed-compensated X/Y flow is displayed in `m/s`;
 the raw angular rates remain visible as a diagnostic. The corner view animates
 the external IM10A using the future `sensor_msgs/Imu` contract. Until ROS 2 is
 installed, that stream is decoded directly from `/dev/imu_usb`. Its display is
-mapped from the IM10A's Y-forward sensor frame into the Cube body preview
-(`body X = sensor Y`, `body Y = sensor X`, `body Z = -sensor Z`) and
-reference-aligned to Cube at startup. This visual map is still marked
-unverified until the complete sensor-to-body extrinsics are measured.
+reference-aligned to Cube at startup, while its sensor-to-body extrinsics remain
+explicitly unverified.
 
 The visualizer owns both `/dev/ttyTHS1` and `/dev/imu_usb` while it runs, so
 stop it before starting another direct sensor process. Use `--demo` to exercise

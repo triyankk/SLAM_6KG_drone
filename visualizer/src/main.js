@@ -12,10 +12,6 @@ import {
   Scan,
   Square,
 } from "lucide";
-import {
-  mapIm10aDeltaToScene,
-  mapIm10aVectorToScene,
-} from "./imu-frame.js";
 import "./style.css";
 
 const icons = {
@@ -487,13 +483,12 @@ const yawQuaternion = new THREE.Quaternion();
 const pitchQuaternion = new THREE.Quaternion();
 const rollQuaternion = new THREE.Quaternion();
 const attitudeQuaternion = new THREE.Quaternion();
-const rosNativeEuler = new THREE.Euler(0, 0, 0, "ZYX");
-const rosNativeQuaternion = new THREE.Quaternion();
-const rosReferenceQuaternion = new THREE.Quaternion();
-const cubeReferenceQuaternion = new THREE.Quaternion();
-const rosDeltaQuaternion = new THREE.Quaternion();
-const rosMappedDeltaQuaternion = new THREE.Quaternion();
+const rosYawQuaternion = new THREE.Quaternion();
+const rosPitchQuaternion = new THREE.Quaternion();
+const rosRollQuaternion = new THREE.Quaternion();
+const rosAttitudeQuaternion = new THREE.Quaternion();
 const rosDisplayQuaternion = new THREE.Quaternion();
+const rosDisplayCorrection = new THREE.Quaternion();
 const rosDisplayEuler = new THREE.Euler(0, 0, 0, "YZX");
 const worldFlow = new THREE.Vector3();
 const sensorWorld = new THREE.Vector3();
@@ -586,46 +581,22 @@ function composeSceneAttitude(
   return target.copy(yawPart).multiply(pitchPart).multiply(rollPart);
 }
 
-function updateRosNativeQuaternion(rosImu) {
-  const values = rosImu.quaternion_wxyz;
-  if (
-    rosImu.orientation_valid &&
-    Array.isArray(values) &&
-    values.length === 4 &&
-    values.every(Number.isFinite)
-  ) {
-    return rosNativeQuaternion
-      .set(values[1], values[2], values[3], values[0])
-      .normalize();
-  }
-  rosNativeEuler.set(
-    finite(rosImu.roll_rad),
-    finite(rosImu.pitch_rad),
-    finite(rosImu.yaw_rad),
-    "ZYX",
-  );
-  return rosNativeQuaternion.setFromEuler(rosNativeEuler);
-}
-
 function updateRosDisplayQuaternion(rosImu) {
-  const nativeOrientation = updateRosNativeQuaternion(rosImu);
-  if (rosDisplayAligned) {
-    rosDeltaQuaternion
-      .copy(rosReferenceQuaternion)
-      .invert()
-      .multiply(nativeOrientation);
-    mapIm10aDeltaToScene(
-      rosMappedDeltaQuaternion,
-      rosDeltaQuaternion,
-    );
-    return rosDisplayQuaternion
-      .copy(cubeReferenceQuaternion)
-      .multiply(rosMappedDeltaQuaternion);
-  }
-  return mapIm10aDeltaToScene(
-    rosDisplayQuaternion,
-    nativeOrientation,
+  composeSceneAttitude(
+    rosAttitudeQuaternion,
+    rosImu.roll_rad,
+    rosImu.pitch_rad,
+    rosImu.yaw_rad,
+    rosYawQuaternion,
+    rosPitchQuaternion,
+    rosRollQuaternion,
   );
+  if (rosDisplayAligned) {
+    return rosDisplayQuaternion
+      .copy(rosDisplayCorrection)
+      .multiply(rosAttitudeQuaternion);
+  }
+  return rosDisplayQuaternion.copy(rosAttitudeQuaternion);
 }
 
 function canAlignExternalImu(data) {
@@ -647,7 +618,7 @@ function alignExternalImuDisplay(data) {
   const attitude = data.attitude;
   const rosImu = data.ros_imu;
   composeSceneAttitude(
-    cubeReferenceQuaternion,
+    attitudeQuaternion,
     attitude.roll_rad,
     attitude.pitch_rad,
     attitude.yaw_rad,
@@ -655,7 +626,10 @@ function alignExternalImuDisplay(data) {
     pitchQuaternion,
     rollQuaternion,
   );
-  rosReferenceQuaternion.copy(updateRosNativeQuaternion(rosImu));
+  updateRosDisplayQuaternion(rosImu);
+  rosDisplayCorrection
+    .copy(attitudeQuaternion)
+    .multiply(rosAttitudeQuaternion.clone().invert());
   rosDisplayAligned = true;
   elements.alignImuButton.classList.add("is-active");
   elements.alignImuButton.title = "Re-align external IMU display to Cube";
@@ -663,7 +637,7 @@ function alignExternalImuDisplay(data) {
     "aria-label",
     "Re-align external IMU display to Cube",
   );
-  elements.rosFrameStatus.textContent = "Y/X/-Z REF - UNVERIFIED";
+  elements.rosFrameStatus.textContent = "REF ONLY - UNVERIFIED";
   elements.rosFrameStatus.classList.add("is-reference-aligned");
   return true;
 }
@@ -954,16 +928,17 @@ function updateRosImuScene(data, deltaSeconds) {
   if (rosImu.age_ms === null || rosImu.age_ms === undefined) return;
 
   const blend =
-    1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.014);
+    1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.025);
   const rosDisplay = updateRosDisplayQuaternion(rosImu);
   rosImuRig.quaternion.slerp(rosDisplay, blend);
 
-  mapIm10aVectorToScene(
-    rosAccelWorld,
-    finite(rosImu.accel_x_mss),
-    finite(rosImu.accel_y_mss),
-    finite(rosImu.accel_z_mss),
-  ).applyQuaternion(rosDisplay);
+  rosAccelWorld
+    .set(
+      finite(rosImu.accel_x_mss),
+      -finite(rosImu.accel_z_mss),
+      finite(rosImu.accel_y_mss),
+    )
+    .applyQuaternion(rosDisplay);
   const accelLength = rosAccelWorld.length();
   if (accelLength > 0.02) {
     rosAccelWorld.normalize();
@@ -978,12 +953,13 @@ function updateRosImuScene(data, deltaSeconds) {
     rosAccelArrow.visible = false;
   }
 
-  mapIm10aVectorToScene(
-    rosGyroWorld,
-    finite(rosImu.gyro_x_rads),
-    finite(rosImu.gyro_y_rads),
-    finite(rosImu.gyro_z_rads),
-  ).applyQuaternion(rosDisplay);
+  rosGyroWorld
+    .set(
+      finite(rosImu.gyro_x_rads),
+      -finite(rosImu.gyro_z_rads),
+      finite(rosImu.gyro_y_rads),
+    )
+    .applyQuaternion(rosDisplay);
   const gyroLength = rosGyroWorld.length();
   if (gyroLength > 0.002) {
     rosGyroWorld.normalize();
