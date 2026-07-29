@@ -21,6 +21,8 @@ optflow-preflight = "optflow_slam.cli:main"
 optflow-rgb = "optflow_slam.camera_server:main"
 optflow-visualizer = "optflow_slam.visualizer_server:main"
 optflow-flight-log = "optflow_slam.flight_logger:main"
+optflow-flight-service = "optflow_slam.flight_service:main"
+optflow-flight-status = "optflow_slam.flight_service:status_main"
 optflow-analyze-flight = "optflow_slam.flight_analysis:main"
 
 [tool.setuptools.packages.find]

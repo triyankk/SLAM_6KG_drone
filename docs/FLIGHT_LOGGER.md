@@ -5,30 +5,40 @@ change mode, send movement targets, or publish ExternalNav.
 
 ## Before A Flight
 
-Start the visualizer so it remains the only owner of the Cube UART and IM10A:
+The installed `optflow-flight-logger.service` starts with the Jetson and owns
+the Cube UART and IM10A. Check it before leaving for the field:
 
 ```bash
-./optflow visualizer --host 0.0.0.0 --no-browser
+./optflow flight-status
 ```
 
-Do not run `./optflow camera` during a flight recording. The logger owns the
-RealSense while it writes the full-rate bag and sampled point clouds.
+The expected idle result is `STATE=waiting_for_arm`, `LINK=true`, and
+`ARMED=false`. No session folder or camera recording is created while disarmed.
 
-Start a named recording:
+Do not run the visualizer, standalone RGB stream, or manual logger in parallel
+with this service. The service owns `/dev/ttyTHS1` and `/dev/imu_usb`
+continuously, then claims the RealSense and JT16 UDP port only while recording.
+
+## Automatic Trigger
+
+An armed Cube heartbeat starts a session. The logger first writes its five
+seconds of buffered telemetry and raw sensor events, then starts the full-rate
+RealSense bag, sampled point clouds, and raw JT16 packet capture. A disarm starts
+a ten-second tail. Re-arming during that tail keeps the same session open;
+otherwise the service finalizes the bag, PLY map, manifest, and analysis report.
+
+The recorder stops before free space falls below 5 GB and will not repeatedly
+start partial sessions while the same armed period continues. It becomes
+eligible again only after detecting a disarm. The full 640x480 at 30 Hz
+color/depth bag is intentionally high fidelity. The current bench capture used
+about 1.3 GB per minute; the generated report records the measured rate for
+every session.
+
+Follow service activity locally with:
 
 ```bash
-./optflow flight-log --name field-01
+journalctl --user -u optflow-flight-logger.service -f
 ```
-
-The logger starts before arming and records until `Ctrl+C`. Stop it only after
-landing and disarming so shutdown can finalize the RealSense bag, PLY map,
-manifest, and analysis report. It stops itself before free disk space falls
-below 5 GB.
-
-The full 640x480 at 30 Hz color/depth bag is intentionally high fidelity. The
-current bench capture used about 1.3 GB per minute; the generated report records
-the measured rate for every session. Use `--no-realsense-bag` only when replay
-data is deliberately unnecessary.
 
 ## Session Layout
 
@@ -88,6 +98,12 @@ MAVLink command path.
 
 ## After A Flight
 
+Wait for `STATE=waiting_for_arm`, then inspect `LAST_SESSION` and `LAST_REPORT`:
+
+```bash
+./optflow flight-status
+```
+
 Attach the corresponding Cube DataFlash log and regenerate the report:
 
 ```bash
@@ -111,8 +127,20 @@ The first review should use:
 
 ## Current Ownership
 
-The visualizer owns `/dev/ttyTHS1` and `/dev/imu_usb`. The logger subscribes to
-its HTTP event stream, so it never opens either serial device. The logger owns
-the D415 and UDP port 2368 while recording. Once a ROS 2 Hesai driver is active,
-raw lidar capture must move to the driver's packet or `PointCloud2` topic rather
-than sharing the UDP socket.
+The automatic logger owns `/dev/ttyTHS1` and `/dev/imu_usb`; it does not depend
+on the visualizer or an HTTP stream. It owns the D415 and UDP port 2368 only
+between arm and post-disarm finalization. For bench visualization, first stop
+the service, run the visualizer, then restart the service afterward:
+
+```bash
+systemctl --user stop optflow-flight-logger.service
+./optflow visualizer --host 0.0.0.0
+systemctl --user start optflow-flight-logger.service
+```
+
+Once a ROS 2 Hesai driver is active, raw lidar capture must move to the driver's
+packet or `PointCloud2` topic rather than sharing the UDP socket.
+
+The older `./optflow flight-log` command remains available for deliberately
+manual bench captures. It needs the service stopped and the visualizer running;
+it is not the field workflow.

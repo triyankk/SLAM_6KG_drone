@@ -15,10 +15,13 @@ usage() {
         "  preflight   Run the read-only hardware readiness probe" \
         "  camera      Start the forward RealSense RGB stream" \
         "  flight-log  Record telemetry, sensor data, and a 3D flight cloud" \
+        "  flight-service Run the arm-triggered logger in the foreground" \
+        "  flight-status Show automatic flight logger state" \
         "  analyze     Analyze a flight session and optional Cube BIN log" \
         "  cube-mount  Inspect/apply the measured Cube mounting transform" \
         "  build-ch341 Build the CH340/CH341 USB serial kernel driver" \
         "  install-ch341 Install the driver and IMU udev rule as root" \
+        "  install-flight-service Enable the arm-triggered boot logger" \
         "  install-headless-vnc Install the reversible headless X/VNC setup" \
         "  check-headless-vnc Verify the local X display and VNC listener" \
         "  visualizer  Start the live H-Flow visualizer"
@@ -63,6 +66,15 @@ case "${command}" in
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/flight_logger.py" "$@"
         ;;
+    flight-service)
+        require_python
+        exec "${PYTHON}" \
+            "${ROOT_DIR}/scripts/flight_logger_service.py" "$@"
+        ;;
+    flight-status)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/flight_status.py" "$@"
+        ;;
     analyze)
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/analyze_flight.py" "$@"
@@ -76,6 +88,9 @@ case "${command}" in
         ;;
     install-ch341)
         exec "${ROOT_DIR}/hardware/install-ch341.sh" "$@"
+        ;;
+    install-flight-service)
+        exec "${ROOT_DIR}/hardware/install-flight-logger-service.sh" "$@"
         ;;
     install-headless-vnc)
         exec "${ROOT_DIR}/hardware/install-headless-vnc.sh" "$@"

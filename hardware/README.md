@@ -31,3 +31,13 @@ sudo ./optflow install-headless-vnc
 
 The installer captures the current system configuration before replacing it.
 It does not restart the display manager or reboot the Jetson.
+
+The automatic flight logger is a per-user service. Install it once with:
+
+```bash
+./optflow install-flight-service
+```
+
+The installer enables user lingering so the logger starts at boot without an
+interactive login. The service definition remains project-owned at
+`systemd/optflow-flight-logger.service`.

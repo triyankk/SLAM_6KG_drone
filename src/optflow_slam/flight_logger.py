@@ -567,11 +567,14 @@ class FlightSession:
         )
 
     def record_snapshot(
-        self, snapshot: dict[str, Any], received_monotonic_ns: int
+        self,
+        snapshot: dict[str, Any],
+        received_monotonic_ns: int,
+        host_time_utc: str | None = None,
     ) -> None:
         row = {
             "schema_version": SCHEMA_VERSION,
-            "host_time_utc": _utc_now(),
+            "host_time_utc": host_time_utc or _utc_now(),
             "host_monotonic_ns": received_monotonic_ns,
             "snapshot": snapshot,
         }
@@ -599,18 +602,27 @@ class FlightSession:
             current = self._source_stats.setdefault(source, {})
             current.update(values)
 
-    def close(self) -> None:
+    def close(
+        self, *, status: str = "complete", reason: str | None = None
+    ) -> None:
+        if status not in ("complete", "interrupted"):
+            raise ValueError("session status must be complete or interrupted")
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-        self.event("session", "recording_stopped", {})
+        self.event(
+            "session",
+            "recording_stopped",
+            {"status": status, "reason": reason},
+        )
         self.telemetry.close()
         self.sensor_events.close()
         self.shadow.close()
         self.events.close()
         self._manifest.update(
-            status="complete",
+            status=status,
+            stop_reason=reason,
             ended_utc=_utc_now(),
             rows={
                 "telemetry": self.telemetry.rows,

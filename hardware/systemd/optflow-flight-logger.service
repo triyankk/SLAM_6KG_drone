@@ -1,0 +1,16 @@
+[Unit]
+Description=optFlow SLAM arm-triggered flight logger
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/vscode/optFlow_slam
+ExecStart=%h/vscode/optFlow_slam/.venv/bin/python %h/vscode/optFlow_slam/scripts/flight_logger_service.py
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=90
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

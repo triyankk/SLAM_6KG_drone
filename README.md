@@ -88,9 +88,10 @@ The browser transport runs at 60 Hz, but the current factory IM10A stream remain
 10 Hz; increasing the real sensor rate requires the reversible baud/rate
 configuration and recovery workflow.
 
-The visualizer owns both `/dev/ttyTHS1` and `/dev/imu_usb` while it runs, so
-stop it before starting another direct sensor process. Use `--demo` to exercise
-both views without opening either hardware link.
+The visualizer owns both `/dev/ttyTHS1` and `/dev/imu_usb` while it runs. Stop
+the automatic flight logger before a bench visualization, then restart it
+afterward. Use `--demo` to exercise both views without opening either hardware
+link.
 
 Run the forward RealSense RGB stream:
 
@@ -102,17 +103,20 @@ Open `http://127.0.0.1:8770` on the Jetson or port `8770` at the Jetson's LAN
 address from another device. This process owns only the RealSense camera; it
 does not open the Cube UART or issue flight commands.
 
-Record a passive flight dataset while the visualizer is running:
+The field logger starts automatically with the Jetson and waits for the Cube to
+arm:
 
 ```bash
-./optflow flight-log --name field-01
+./optflow flight-status
 ```
 
-Stop the standalone RGB camera stream first because the flight logger owns the
-D415 while recording. It saves synchronized telemetry and shadow predictions,
-a full RealSense bag, raw JT16 PCAP, sampled PLY frames, a merged 3D environment
-cloud, and an analysis report under `data/recordings/flights/`. Its perfect-SLAM
-local-target reference is offline comparison only and cannot send commands.
+It buffers five seconds of telemetry before arm, records throughout the armed
+period, and finalizes ten seconds after disarm. It saves synchronized telemetry
+and shadow predictions, a full RealSense bag, raw JT16 PCAP, sampled PLY frames,
+a merged 3D environment cloud, and an analysis report under
+`data/recordings/flights/`. The visualizer and RGB stream stay off during this
+workflow. Its perfect-SLAM local-target reference is offline comparison only
+and cannot send commands.
 
 After landing, attach the matching Cube DataFlash log:
 
@@ -190,8 +194,8 @@ hold, pilot takeover, or controlled landing, not blind dead reckoning.
 ## Project Map
 
 - `config/system.yaml`: single source of hardware, limits, and enable gates.
-- `optflow`: project-relative launcher for setup, tests, preflight, and the
-  visualizer.
+- `optflow`: project-relative launcher for setup, tests, services, preflight,
+  and bench tools.
 - `data/`: all project-generated calibrations, logs, recordings, and maps.
 - `hardware/`: project-owned host hardware configuration.
 - `hardware/kernel/ch341/`: pinned IM10A USB serial driver for this Jetson
@@ -206,6 +210,7 @@ hold, pilot takeover, or controlled landing, not blind dead reckoning.
 - `docs/POWER_AND_ESC.md`: acceptance tests for the individual ESC conversion.
 - `scripts/preflight.py`: read-only live hardware gate.
 - `scripts/rgb_stream.py`: project-local RealSense RGB web stream.
+- `scripts/flight_logger_service.py`: boot-time arm-triggered flight recorder.
 - `scripts/visualizer.py`: live Cube attitude, H-Flow, range, trace, and CSV UI.
 - `visualizer/`: Three.js client and responsive visual checks.
 - `src/optflow_slam/`: new code only; no old bridge imports.
