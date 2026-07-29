@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from copy import deepcopy
 from functools import partial
 from http import HTTPStatus
@@ -27,6 +28,74 @@ DEFAULT_CONFIG = CONFIG_DIR / "system.yaml"
 TELEMETRY_STREAM_HZ = 60.0
 
 
+def _valid_pwm(value: Any) -> int | None:
+    pwm = int(value)
+    return pwm if 0 < pwm < 65535 else None
+
+
+def _event_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _event_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_event_safe(item) for item in value]
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+class RawEventBus:
+    """Bounded event history for loss-detectable sensor recording clients."""
+
+    def __init__(self, max_events: int = 20_000) -> None:
+        self._condition = threading.Condition()
+        self._events: deque[dict[str, Any]] = deque(maxlen=max_events)
+        self._sequence = 0
+
+    def publish(
+        self, source: str, event_type: str, data: dict[str, Any]
+    ) -> None:
+        with self._condition:
+            self._sequence += 1
+            self._events.append(
+                {
+                    "sequence": self._sequence,
+                    "host_monotonic_ns": time.monotonic_ns(),
+                    "host_unix_ns": time.time_ns(),
+                    "source": source,
+                    "type": event_type,
+                    "data": data,
+                }
+            )
+            self._condition.notify_all()
+
+    def latest_sequence(self) -> int:
+        with self._condition:
+            return self._sequence
+
+    def wait_after(
+        self, sequence: int, timeout: float = 1.0, limit: int = 512
+    ) -> tuple[list[dict[str, Any]], int]:
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._sequence > sequence,
+                timeout=timeout,
+            )
+            if not self._events:
+                return [], 0
+            oldest = int(self._events[0]["sequence"])
+            dropped = max(0, oldest - sequence - 1)
+            events = [
+                event
+                for event in self._events
+                if int(event["sequence"]) > sequence
+            ][:limit]
+            return events, dropped
+
+
 class TelemetryStore:
     """Thread-safe latest-value store with per-stream freshness."""
 
@@ -41,6 +110,7 @@ class TelemetryStore:
         now = time.monotonic()
         self._lock = threading.Lock()
         self._imu_axis_signs = imu_axis_signs
+        self.raw_events = RawEventBus()
         self._state: dict[str, Any] = {
             "sequence": 0,
             "source": source,
@@ -54,6 +124,7 @@ class TelemetryStore:
                 "component_id": None,
                 "armed": False,
                 "mode": "UNKNOWN",
+                "landed_state": None,
             },
             "flow": {
                 "delta_x_dpix": 0,
@@ -78,6 +149,7 @@ class TelemetryStore:
                 "rollspeed_rads": 0.0,
                 "pitchspeed_rads": 0.0,
                 "yawspeed_rads": 0.0,
+                "time_boot_ms": None,
                 "updated_monotonic": None,
             },
             "imu": {
@@ -88,6 +160,103 @@ class TelemetryStore:
                 "gyro_y_rads": 0.0,
                 "gyro_z_rads": 0.0,
                 "message": "WAITING",
+                "updated_monotonic": None,
+            },
+            "timing": {
+                "time_boot_ms": None,
+                "unix_usec": None,
+                "updated_monotonic": None,
+            },
+            "local_position": {
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_down_m": 0.0,
+                "vx_mps": 0.0,
+                "vy_mps": 0.0,
+                "vz_mps": 0.0,
+                "time_boot_ms": None,
+                "updated_monotonic": None,
+            },
+            "global_position": {
+                "lat_deg": None,
+                "lon_deg": None,
+                "alt_msl_m": None,
+                "relative_alt_m": None,
+                "vx_mps": None,
+                "vy_mps": None,
+                "vz_mps": None,
+                "heading_deg": None,
+                "time_boot_ms": None,
+                "updated_monotonic": None,
+            },
+            "gps": {
+                "fix_type": 0,
+                "satellites_visible": 0,
+                "eph_m": None,
+                "epv_m": None,
+                "ground_speed_mps": None,
+                "course_deg": None,
+                "alt_msl_m": None,
+                "updated_monotonic": None,
+            },
+            "power": {
+                "source": "WAITING",
+                "battery_id": None,
+                "voltage_v": None,
+                "current_a": None,
+                "remaining_pct": None,
+                "consumed_mah": None,
+                "consumed_wh": None,
+                "time_remaining_s": None,
+                "updated_monotonic": None,
+            },
+            "vibration": {
+                "x_mss": None,
+                "y_mss": None,
+                "z_mss": None,
+                "clipping_0": 0,
+                "clipping_1": 0,
+                "clipping_2": 0,
+                "updated_monotonic": None,
+            },
+            "ekf": {
+                "flags": 0,
+                "velocity_variance": None,
+                "horizontal_position_variance": None,
+                "vertical_position_variance": None,
+                "compass_variance": None,
+                "terrain_alt_variance": None,
+                "airspeed_variance": None,
+                "updated_monotonic": None,
+            },
+            "rc": {
+                "channels_pwm": [None] * 18,
+                "channel_count": 0,
+                "rssi": None,
+                "time_boot_ms": None,
+                "updated_monotonic": None,
+            },
+            "actuators": {
+                "servo_pwm": [None] * 16,
+                "port": None,
+                "time_usec": None,
+                "updated_monotonic": None,
+            },
+            "position_target": {
+                "coordinate_frame": None,
+                "type_mask": None,
+                "x_m": None,
+                "y_m": None,
+                "z_m": None,
+                "vx_mps": None,
+                "vy_mps": None,
+                "vz_mps": None,
+                "afx_mss": None,
+                "afy_mss": None,
+                "afz_mss": None,
+                "yaw_rad": None,
+                "yaw_rate_rads": None,
+                "time_boot_ms": None,
                 "updated_monotonic": None,
             },
             "ros_imu": {
@@ -150,6 +319,11 @@ class TelemetryStore:
             last_packet_monotonic=now,
         )
 
+    def publish_raw(
+        self, source: str, event_type: str, data: dict[str, Any]
+    ) -> None:
+        self.raw_events.publish(source, event_type, data)
+
     def set_link(self, connected: bool, detail: str) -> None:
         self.update("link", connected=connected, detail=detail)
 
@@ -181,7 +355,23 @@ class TelemetryStore:
         state["link"]["age_ms"] = age_ms(
             state["link"].pop("last_packet_monotonic")
         )
-        for section in ("flow", "range", "attitude", "imu", "ros_imu"):
+        for section in (
+            "flow",
+            "range",
+            "attitude",
+            "imu",
+            "ros_imu",
+            "timing",
+            "local_position",
+            "global_position",
+            "gps",
+            "power",
+            "vibration",
+            "ekf",
+            "rc",
+            "actuators",
+            "position_target",
+        ):
             state[section]["age_ms"] = age_ms(
                 state[section].pop("updated_monotonic")
             )
@@ -258,7 +448,28 @@ class MavlinkSource(threading.Thread):
             mavutil.mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR: 50_000,
             mavutil.mavlink.MAVLINK_MSG_ID_HIGHRES_IMU: 20_000,
             mavutil.mavlink.MAVLINK_MSG_ID_RAW_IMU: 20_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED: 50_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT: 100_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT: 200_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_BATTERY_STATUS: 500_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS: 500_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_VIBRATION: 100_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_EKF_STATUS_REPORT: 200_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_RC_CHANNELS: 100_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW: 100_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_POSITION_TARGET_LOCAL_NED: 100_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_SYSTEM_TIME: 1_000_000,
+            mavutil.mavlink.MAVLINK_MSG_ID_EXTENDED_SYS_STATE: 500_000,
         }
+        critical_message_ids = frozenset(
+            (
+                mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE,
+                mavutil.mavlink.MAVLINK_MSG_ID_OPTICAL_FLOW,
+                mavutil.mavlink.MAVLINK_MSG_ID_DISTANCE_SENSOR,
+                mavutil.mavlink.MAVLINK_MSG_ID_HIGHRES_IMU,
+                mavutil.mavlink.MAVLINK_MSG_ID_RAW_IMU,
+            )
+        )
         while not self.stop_event.is_set():
             master = None
             intervals_requested = False
@@ -277,25 +488,37 @@ class MavlinkSource(threading.Thread):
                     raise RuntimeError("Cube heartbeat timed out")
 
                 master.target_system = heartbeat.get_srcSystem()
-                master.target_component = heartbeat.get_srcComponent()
                 self.target_system = master.target_system
-                self.target_component = master.target_component
+                self.target_component = heartbeat.get_srcComponent()
+                # ArduPilot accepts stream-rate commands at the autopilot-wide
+                # component target. Heartbeats are still filtered to the
+                # observed flight-controller component above.
+                master.target_component = 0
                 self._handle_heartbeat(heartbeat, mavutil)
+                master.mav.request_data_stream_send(
+                    master.target_system,
+                    master.target_component,
+                    mavutil.mavlink.MAV_DATA_STREAM_ALL,
+                    10,
+                    1,
+                )
+                for message_id in critical_message_ids:
+                    _set_message_interval(
+                        master,
+                        message_id,
+                        message_intervals[message_id],
+                        wait_for_ack=True,
+                    )
                 for message_id, interval_us in message_intervals.items():
-                    result = _set_message_interval(
+                    if message_id in critical_message_ids:
+                        continue
+                    _set_message_interval(
                         master,
                         message_id,
                         interval_us,
-                        wait_for_ack=True,
+                        wait_for_ack=False,
                     )
-                    if result not in (
-                        mavutil.mavlink.MAV_RESULT_ACCEPTED,
-                        mavutil.mavlink.MAV_RESULT_IN_PROGRESS,
-                    ):
-                        self.store.set_link(
-                            True,
-                            f"Message {message_id} interval ACK: {result}",
-                        )
+                    time.sleep(0.01)
                 intervals_requested = True
 
                 while not self.stop_event.is_set():
@@ -307,8 +530,23 @@ class MavlinkSource(threading.Thread):
                             raise RuntimeError("MAVLink stream stale")
                         continue
                     self.store.mark_packet()
+                    try:
+                        raw_payload = message.to_dict()
+                    except AttributeError:
+                        raw_payload = {}
+                    self.store.publish_raw(
+                        "cube_mavlink",
+                        message.get_type(),
+                        _event_safe(raw_payload),
+                    )
                     self._handle_message(message, mavutil)
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            except (
+                AttributeError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
                 self.store.set_link(False, str(exc))
                 self.stop_event.wait(2.0)
             finally:
@@ -370,6 +608,7 @@ class MavlinkSource(threading.Thread):
                 rollspeed_rads=float(message.rollspeed),
                 pitchspeed_rads=float(message.pitchspeed),
                 yawspeed_rads=float(message.yawspeed),
+                time_boot_ms=int(message.time_boot_ms),
                 updated_monotonic=now,
             )
         elif message_type == "OPTICAL_FLOW":
@@ -425,6 +664,183 @@ class MavlinkSource(threading.Thread):
                 message="RAW_IMU",
                 updated_monotonic=now,
             )
+        elif message_type == "SYSTEM_TIME":
+            self.store.update(
+                "timing",
+                time_boot_ms=int(message.time_boot_ms),
+                unix_usec=(
+                    int(message.time_unix_usec)
+                    if int(message.time_unix_usec) > 0
+                    else None
+                ),
+                updated_monotonic=now,
+            )
+        elif message_type == "LOCAL_POSITION_NED":
+            self.store.update(
+                "local_position",
+                x_m=float(message.x),
+                y_m=float(message.y),
+                z_down_m=float(message.z),
+                vx_mps=float(message.vx),
+                vy_mps=float(message.vy),
+                vz_mps=float(message.vz),
+                time_boot_ms=int(message.time_boot_ms),
+                updated_monotonic=now,
+            )
+        elif message_type == "GLOBAL_POSITION_INT":
+            heading = int(message.hdg)
+            self.store.update(
+                "global_position",
+                lat_deg=float(message.lat) / 1.0e7,
+                lon_deg=float(message.lon) / 1.0e7,
+                alt_msl_m=float(message.alt) / 1000.0,
+                relative_alt_m=float(message.relative_alt) / 1000.0,
+                vx_mps=float(message.vx) / 100.0,
+                vy_mps=float(message.vy) / 100.0,
+                vz_mps=float(message.vz) / 100.0,
+                heading_deg=(
+                    None if heading == 65535 else float(heading) / 100.0
+                ),
+                time_boot_ms=int(message.time_boot_ms),
+                updated_monotonic=now,
+            )
+        elif message_type == "GPS_RAW_INT":
+            eph = int(message.eph)
+            epv = int(message.epv)
+            velocity = int(message.vel)
+            course = int(message.cog)
+            self.store.update(
+                "gps",
+                fix_type=int(message.fix_type),
+                satellites_visible=int(message.satellites_visible),
+                eph_m=None if eph == 65535 else float(eph) / 100.0,
+                epv_m=None if epv == 65535 else float(epv) / 100.0,
+                ground_speed_mps=(
+                    None if velocity == 65535 else float(velocity) / 100.0
+                ),
+                course_deg=(
+                    None if course == 65535 else float(course) / 100.0
+                ),
+                alt_msl_m=float(message.alt) / 1000.0,
+                updated_monotonic=now,
+            )
+        elif message_type == "BATTERY_STATUS":
+            voltages_mv = [
+                int(value)
+                for value in message.voltages
+                if 0 < int(value) < 65535
+            ]
+            current = int(message.current_battery)
+            remaining = int(message.battery_remaining)
+            consumed_mah = int(message.current_consumed)
+            consumed_wh = int(getattr(message, "energy_consumed", -1))
+            time_remaining = int(
+                getattr(message, "time_remaining", 0)
+            )
+            self.store.update(
+                "power",
+                source="BATTERY_STATUS",
+                battery_id=int(message.id),
+                voltage_v=(
+                    sum(voltages_mv) / 1000.0 if voltages_mv else None
+                ),
+                current_a=None if current < 0 else float(current) / 100.0,
+                remaining_pct=None if remaining < 0 else remaining,
+                consumed_mah=None if consumed_mah < 0 else consumed_mah,
+                consumed_wh=None if consumed_wh < 0 else consumed_wh / 36.0,
+                time_remaining_s=(
+                    None if time_remaining <= 0 else time_remaining
+                ),
+                updated_monotonic=now,
+            )
+        elif message_type == "SYS_STATUS":
+            voltage = int(message.voltage_battery)
+            current = int(message.current_battery)
+            remaining = int(message.battery_remaining)
+            self.store.update(
+                "power",
+                source="SYS_STATUS",
+                voltage_v=None if voltage == 65535 else voltage / 1000.0,
+                current_a=None if current < 0 else current / 100.0,
+                remaining_pct=None if remaining < 0 else remaining,
+                updated_monotonic=now,
+            )
+        elif message_type == "VIBRATION":
+            self.store.update(
+                "vibration",
+                x_mss=float(message.vibration_x),
+                y_mss=float(message.vibration_y),
+                z_mss=float(message.vibration_z),
+                clipping_0=int(message.clipping_0),
+                clipping_1=int(message.clipping_1),
+                clipping_2=int(message.clipping_2),
+                updated_monotonic=now,
+            )
+        elif message_type == "EKF_STATUS_REPORT":
+            self.store.update(
+                "ekf",
+                flags=int(message.flags),
+                velocity_variance=float(message.velocity_variance),
+                horizontal_position_variance=float(
+                    message.pos_horiz_variance
+                ),
+                vertical_position_variance=float(message.pos_vert_variance),
+                compass_variance=float(message.compass_variance),
+                terrain_alt_variance=float(message.terrain_alt_variance),
+                airspeed_variance=float(message.airspeed_variance),
+                updated_monotonic=now,
+            )
+        elif message_type == "RC_CHANNELS":
+            channels = [
+                _valid_pwm(getattr(message, f"chan{index}_raw", 65535))
+                for index in range(1, 19)
+            ]
+            self.store.update(
+                "rc",
+                channels_pwm=channels,
+                channel_count=int(message.chancount),
+                rssi=(
+                    None if int(message.rssi) == 255 else int(message.rssi)
+                ),
+                time_boot_ms=int(message.time_boot_ms),
+                updated_monotonic=now,
+            )
+        elif message_type == "SERVO_OUTPUT_RAW":
+            outputs = [
+                _valid_pwm(getattr(message, f"servo{index}_raw", 0))
+                for index in range(1, 17)
+            ]
+            self.store.update(
+                "actuators",
+                servo_pwm=outputs,
+                port=int(message.port),
+                time_usec=int(message.time_usec),
+                updated_monotonic=now,
+            )
+        elif message_type == "POSITION_TARGET_LOCAL_NED":
+            self.store.update(
+                "position_target",
+                coordinate_frame=int(message.coordinate_frame),
+                type_mask=int(message.type_mask),
+                x_m=float(message.x),
+                y_m=float(message.y),
+                z_m=float(message.z),
+                vx_mps=float(message.vx),
+                vy_mps=float(message.vy),
+                vz_mps=float(message.vz),
+                afx_mss=float(message.afx),
+                afy_mss=float(message.afy),
+                afz_mss=float(message.afz),
+                yaw_rad=float(message.yaw),
+                yaw_rate_rads=float(message.yaw_rate),
+                time_boot_ms=int(message.time_boot_ms),
+                updated_monotonic=now,
+            )
+        elif message_type == "EXTENDED_SYS_STATE":
+            self.store.update(
+                "vehicle",
+                landed_state=int(message.landed_state),
+            )
 
 
 class Im10aSource(threading.Thread):
@@ -478,6 +894,14 @@ class Im10aSource(threading.Thread):
                         continue
                     for measurement in decoder.feed(data):
                         now = time.monotonic()
+                        self.store.publish_raw(
+                            "external_imu",
+                            measurement.kind,
+                            {
+                                "values": list(measurement.values),
+                                "checksum_errors": decoder.checksum_errors,
+                            },
+                        )
                         common = {
                             "connected": True,
                             "detail": "Receiving IM10A serial",
@@ -638,6 +1062,9 @@ def make_handler(
             if self.path == "/api/stream":
                 self._send_event_stream()
                 return
+            if self.path == "/api/events":
+                self._send_raw_event_stream()
+                return
             if self.path == "/healthz":
                 self._send_json({"ok": True})
                 return
@@ -649,7 +1076,11 @@ def make_handler(
             super().end_headers()
 
         def log_message(self, format: str, *args: Any) -> None:
-            if self.path not in ("/api/stream", "/api/snapshot"):
+            if self.path not in (
+                "/api/stream",
+                "/api/events",
+                "/api/snapshot",
+            ):
                 super().log_message(format, *args)
 
         def _send_json(self, payload: dict[str, Any]) -> None:
@@ -677,6 +1108,38 @@ def make_handler(
                     self.wfile.write(f"data:{payload}\n\n".encode("utf-8"))
                     self.wfile.flush()
                     time.sleep(1.0 / TELEMETRY_STREAM_HZ)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _send_raw_event_stream(self) -> None:
+            self.connection.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+            )
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            sequence = store.raw_events.latest_sequence()
+            try:
+                while True:
+                    events, dropped = store.raw_events.wait_after(sequence)
+                    if not events:
+                        self.wfile.write(b":keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    for index, event in enumerate(events):
+                        payload = dict(event)
+                        if index == 0 and dropped:
+                            payload["dropped_before"] = dropped
+                        encoded = json.dumps(
+                            payload, separators=(",", ":")
+                        )
+                        self.wfile.write(
+                            f"data:{encoded}\n\n".encode("utf-8")
+                        )
+                        sequence = int(event["sequence"])
+                    self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
 

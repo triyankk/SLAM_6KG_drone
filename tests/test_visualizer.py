@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from optflow_slam.visualizer_server import (
     Im10aSource,
     MavlinkSource,
+    RawEventBus,
     TELEMETRY_STREAM_HZ,
     TelemetryStore,
+    _event_safe,
     _set_message_interval,
 )
 
@@ -202,3 +204,93 @@ def test_im10a_source_is_a_separate_telemetry_thread() -> None:
     assert source.name == "im10a-serial"
     assert source.endpoint == "/dev/imu_usb"
     assert source.baud == 9600
+
+
+def test_flight_analysis_telemetry_is_exposed_in_snapshot() -> None:
+    store = TelemetryStore("test")
+    source = MavlinkSource(store, Event(), "/dev/null", 921600)
+    source._handle_message(
+        SimpleNamespace(
+            get_type=lambda: "LOCAL_POSITION_NED",
+            x=1.0,
+            y=2.0,
+            z=-3.0,
+            vx=0.1,
+            vy=0.2,
+            vz=-0.3,
+            time_boot_ms=1234,
+        ),
+        mavutil=None,
+    )
+    source._handle_message(
+        SimpleNamespace(
+            get_type=lambda: "VIBRATION",
+            vibration_x=4.0,
+            vibration_y=5.0,
+            vibration_z=6.0,
+            clipping_0=1,
+            clipping_1=2,
+            clipping_2=3,
+        ),
+        mavutil=None,
+    )
+    source._handle_message(
+        SimpleNamespace(
+            get_type=lambda: "SYS_STATUS",
+            voltage_battery=23600,
+            current_battery=1120,
+            battery_remaining=58,
+        ),
+        mavutil=None,
+    )
+
+    snapshot = store.snapshot()
+
+    assert snapshot["local_position"]["x_m"] == 1.0
+    assert snapshot["local_position"]["z_down_m"] == -3.0
+    assert snapshot["vibration"]["clipping_2"] == 3
+    assert snapshot["power"]["voltage_v"] == 23.6
+    assert snapshot["power"]["current_a"] == 11.2
+
+
+def test_raw_event_bus_reports_overwritten_sequences() -> None:
+    bus = RawEventBus(max_events=2)
+    bus.publish("imu", "accel", {"x": 1})
+    bus.publish("imu", "gyro", {"x": 2})
+    bus.publish("imu", "accel", {"x": 3})
+
+    events, dropped = bus.wait_after(0, timeout=0.0)
+
+    assert dropped == 1
+    assert [event["sequence"] for event in events] == [2, 3]
+
+
+def test_raw_event_payload_converts_binary_mavlink_fields() -> None:
+    assert _event_safe({"data": bytearray((0x01, 0xA2))}) == {
+        "data": "01a2"
+    }
+
+
+def test_battery_status_uses_mavlink_power_units() -> None:
+    store = TelemetryStore("test")
+    source = MavlinkSource(store, Event(), "/dev/null", 921600)
+    source._handle_message(
+        SimpleNamespace(
+            get_type=lambda: "BATTERY_STATUS",
+            voltages=[23600] + [65535] * 9,
+            current_battery=1120,
+            battery_remaining=58,
+            current_consumed=250,
+            energy_consumed=360,
+            time_remaining=120,
+            id=0,
+        ),
+        mavutil=None,
+    )
+
+    power = store.snapshot()["power"]
+
+    assert power["voltage_v"] == 23.6
+    assert power["current_a"] == 11.2
+    assert power["consumed_mah"] == 250
+    assert power["consumed_wh"] == 10.0

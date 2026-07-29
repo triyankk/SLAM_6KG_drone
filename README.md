@@ -102,6 +102,28 @@ Open `http://127.0.0.1:8770` on the Jetson or port `8770` at the Jetson's LAN
 address from another device. This process owns only the RealSense camera; it
 does not open the Cube UART or issue flight commands.
 
+Record a passive flight dataset while the visualizer is running:
+
+```bash
+./optflow flight-log --name field-01
+```
+
+Stop the standalone RGB camera stream first because the flight logger owns the
+D415 while recording. It saves synchronized telemetry and shadow predictions,
+a full RealSense bag, raw JT16 PCAP, sampled PLY frames, a merged 3D environment
+cloud, and an analysis report under `data/recordings/flights/`. Its perfect-SLAM
+local-target reference is offline comparison only and cannot send commands.
+
+After landing, attach the matching Cube DataFlash log:
+
+```bash
+./optflow analyze data/recordings/flights/<session> \
+  --cube-log /path/to/latest.BIN
+```
+
+See [FLIGHT_LOGGER.md](docs/FLIGHT_LOGGER.md) for the folder contract,
+interpretation limits, and field workflow.
+
 Run tests:
 
 ```bash
@@ -180,6 +202,7 @@ hold, pilot takeover, or controlled landing, not blind dead reckoning.
 - `docs/ARCHITECTURE.md`: estimator, planner, Cube, and failure boundaries.
 - `docs/BRINGUP.md`: ordered bench and field sequence.
 - `docs/INTERFACES.md`: frames, timing, odometry, and command contracts.
+- `docs/FLIGHT_LOGGER.md`: passive flight recording and analysis workflow.
 - `docs/POWER_AND_ESC.md`: acceptance tests for the individual ESC conversion.
 - `scripts/preflight.py`: read-only live hardware gate.
 - `scripts/rgb_stream.py`: project-local RealSense RGB web stream.
