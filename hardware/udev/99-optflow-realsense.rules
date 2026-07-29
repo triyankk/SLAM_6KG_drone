@@ -1,0 +1,2 @@
+# D415 libusb access, narrowed from librealsense v2.57.7 device rules.
+ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="8086", ATTR{idProduct}=="0ad3", MODE:="0660", GROUP:="plugdev"

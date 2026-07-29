@@ -64,6 +64,13 @@ Run the Cube and H-Flow bench gate with props removed:
 ./optflow preflight --profile fc_bench
 ```
 
+Check the live IM10A, synchronized D415 RGB-depth stream, and JT16 packets
+without competing with the automatic logger for the Cube UART:
+
+```bash
+./optflow sensor-check
+```
+
 Show all currently missing SLAM hardware:
 
 ```bash
@@ -209,6 +216,8 @@ hold, pilot takeover, or controlled landing, not blind dead reckoning.
 - `docs/FLIGHT_LOGGER.md`: passive flight recording and analysis workflow.
 - `docs/POWER_AND_ESC.md`: acceptance tests for the individual ESC conversion.
 - `scripts/preflight.py`: read-only live hardware gate.
+- `scripts/check_sensors.py`: non-conflicting live Jetson sensor gate.
+- `scripts/configure_lidar_network.py`: dedicated JT16 Ethernet profile.
 - `scripts/rgb_stream.py`: project-local RealSense RGB web stream.
 - `scripts/flight_logger_service.py`: boot-time arm-triggered flight recorder.
 - `scripts/visualizer.py`: live Cube attitude, H-Flow, range, trace, and CSV UI.

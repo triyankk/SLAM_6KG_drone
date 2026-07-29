@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import math
 from pathlib import Path
 from typing import Any
@@ -73,8 +74,10 @@ class ImuConfig:
 @dataclass(frozen=True)
 class LidarConfig:
     model: str
+    ethernet_interface: str
     lidar_ip: str
     jetson_ip: str
+    jetson_prefix_length: int
     udp_port: int
     packet_probe_s: float
     network_values_verified: bool
@@ -236,6 +239,24 @@ def load_config(path: str | Path) -> ProjectConfig:
             "external_imu body-axis signs must define a proper rotation"
         )
 
+    try:
+        lidar_ip = ipaddress.ip_address(str(_required(lidar, "lidar_ip")))
+        jetson_ip = ipaddress.ip_address(str(_required(lidar, "jetson_ip")))
+    except ValueError as exc:
+        raise ConfigError(f"invalid lidar IPv4 address: {exc}") from exc
+    if lidar_ip.version != 4 or jetson_ip.version != 4:
+        raise ConfigError("lidar and Jetson addresses must be IPv4")
+    lidar_prefix = int(_required(lidar, "jetson_prefix_length"))
+    if not 1 <= lidar_prefix <= 32:
+        raise ConfigError("lidar jetson_prefix_length must be from 1 to 32")
+    lidar_network = ipaddress.ip_network(
+        f"{jetson_ip}/{lidar_prefix}", strict=False
+    )
+    if lidar_ip not in lidar_network:
+        raise ConfigError(
+            "lidar_ip must be reachable in the configured Jetson subnet"
+        )
+
     return ProjectConfig(
         flight_controller=FlightControllerConfig(
             endpoint=str(_required(fc, "endpoint")),
@@ -300,8 +321,12 @@ def load_config(path: str | Path) -> ProjectConfig:
         ),
         lidar=LidarConfig(
             model=str(_required(lidar, "model")),
-            lidar_ip=str(_required(lidar, "lidar_ip")),
-            jetson_ip=str(_required(lidar, "jetson_ip")),
+            ethernet_interface=str(
+                _required(lidar, "ethernet_interface")
+            ),
+            lidar_ip=str(lidar_ip),
+            jetson_ip=str(jetson_ip),
+            jetson_prefix_length=lidar_prefix,
             udp_port=int(_required(lidar, "udp_port")),
             packet_probe_s=_positive(
                 _required(lidar, "packet_probe_s"), "packet_probe_s"

@@ -1000,6 +1000,7 @@ class RealSensePointCloudRecorder(threading.Thread):
 
         pipeline = None
         frame_count = 0
+        frame_timeouts = 0
         mapped_frames = 0
         last_map_time = -math.inf
         last_flush_time = time.monotonic()
@@ -1045,7 +1046,27 @@ class RealSensePointCloudRecorder(threading.Thread):
             intrinsics_written = False
 
             while not self.stop_event.is_set():
-                frames = pipeline.wait_for_frames(timeout_ms=2000)
+                try:
+                    frames = pipeline.wait_for_frames(timeout_ms=2000)
+                except RuntimeError as exc:
+                    frame_timeouts += 1
+                    if frame_timeouts == 1 or frame_timeouts % 10 == 0:
+                        self.session.event(
+                            "realsense",
+                            "frame_timeout",
+                            {
+                                "count": frame_timeouts,
+                                "error": str(exc),
+                            },
+                        )
+                    self.session.set_source_stats(
+                        "realsense",
+                        frames_received=frame_count,
+                        frame_timeouts=frame_timeouts,
+                        pointcloud_frames=mapped_frames,
+                        map_voxels=len(self.voxel_map),
+                    )
+                    continue
                 frame_count += 1
                 now = time.monotonic()
                 if now - last_map_time < self.period_s:
@@ -1136,6 +1157,7 @@ class RealSensePointCloudRecorder(threading.Thread):
                 self.session.set_source_stats(
                     "realsense",
                     frames_received=frame_count,
+                    frame_timeouts=frame_timeouts,
                     pointcloud_frames=mapped_frames,
                     map_voxels=len(self.voxel_map),
                     rejected_new_voxels=(
@@ -1164,6 +1186,7 @@ class RealSensePointCloudRecorder(threading.Thread):
             self.session.set_source_stats(
                 "realsense",
                 frames_received=frame_count,
+                frame_timeouts=frame_timeouts,
                 pointcloud_frames=mapped_frames,
                 map_voxels=len(self.voxel_map),
                 rejected_new_voxels=self.voxel_map.rejected_new_voxels,

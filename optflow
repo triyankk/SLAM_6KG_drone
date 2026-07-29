@@ -13,14 +13,17 @@ usage() {
         "  build       Build the local visualizer frontend" \
         "  test        Run Python tests and the frontend build" \
         "  preflight   Run the read-only hardware readiness probe" \
+        "  sensor-check Check live IMU, RGB-depth, and JT16 data" \
         "  camera      Start the forward RealSense RGB stream" \
         "  flight-log  Record telemetry, sensor data, and a 3D flight cloud" \
         "  flight-service Run the arm-triggered logger in the foreground" \
         "  flight-status Show automatic flight logger state" \
         "  analyze     Analyze a flight session and optional Cube BIN log" \
         "  cube-mount  Inspect/apply the measured Cube mounting transform" \
+        "  lidar-network Configure the dedicated JT16 Ethernet route" \
         "  build-ch341 Build the CH340/CH341 USB serial kernel driver" \
         "  install-ch341 Install the driver and IMU udev rule as root" \
+        "  install-realsense-rules Install D415 USB permissions as root" \
         "  install-flight-service Enable the arm-triggered boot logger" \
         "  install-headless-vnc Install the reversible headless X/VNC setup" \
         "  check-headless-vnc Verify the local X display and VNC listener" \
@@ -58,6 +61,10 @@ case "${command}" in
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/preflight.py" "$@"
         ;;
+    sensor-check)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/check_sensors.py" "$@"
+        ;;
     camera)
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/rgb_stream.py" "$@"
@@ -83,11 +90,19 @@ case "${command}" in
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/configure_cube_mount.py" "$@"
         ;;
+    lidar-network)
+        require_python
+        exec "${PYTHON}" \
+            "${ROOT_DIR}/scripts/configure_lidar_network.py" "$@"
+        ;;
     build-ch341)
         make -C "${ROOT_DIR}/hardware/kernel/ch341" "$@"
         ;;
     install-ch341)
         exec "${ROOT_DIR}/hardware/install-ch341.sh" "$@"
+        ;;
+    install-realsense-rules)
+        exec "${ROOT_DIR}/hardware/install-realsense-rules.sh" "$@"
         ;;
     install-flight-service)
         exec "${ROOT_DIR}/hardware/install-flight-logger-service.sh" "$@"

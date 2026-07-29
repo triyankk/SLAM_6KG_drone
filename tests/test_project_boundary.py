@@ -23,8 +23,13 @@ IGNORED_DIRECTORIES = {
     ".pytest_cache",
     ".venv",
     "__pycache__",
+    "calibrations",
     "dist",
+    "logs",
+    "maps",
     "node_modules",
+    "recordings",
+    "runtime",
     "test-output",
     "vendor",
 }

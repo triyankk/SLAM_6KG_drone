@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import socket
+import subprocess
 import time
 
 from .config import ProjectConfig
@@ -191,17 +193,140 @@ def probe_depth_camera(config: ProjectConfig) -> ProbeResult:
             "depth_camera", False, "RealSense SDK is installed; no camera detected"
         )
 
-    identities = []
-    for device in devices:
-        name = device.get_info(rs.camera_info.name)
-        serial = device.get_info(rs.camera_info.serial_number)
-        identities.append(f"{name} serial={serial}")
-    return ProbeResult(
-        "depth_camera",
-        True,
-        "; ".join(identities),
-        {"device_count": len(devices)},
+    identities: list[str] = []
+    matching_serial = False
+    try:
+        for device in devices:
+            name = device.get_info(rs.camera_info.name)
+            serial = device.get_info(rs.camera_info.serial_number)
+            identities.append(f"{name} serial={serial}")
+            if camera.serial is None or serial == camera.serial:
+                matching_serial = True
+    except RuntimeError as exc:
+        return ProbeResult(
+            "depth_camera",
+            False,
+            f"RealSense identity query failed: {exc}",
+        )
+    if not matching_serial:
+        return ProbeResult(
+            "depth_camera",
+            False,
+            (
+                f"Configured serial {camera.serial} is absent; detected "
+                f"{'; '.join(identities)}"
+            ),
+        )
+
+    pipeline = rs.pipeline()
+    stream_config = rs.config()
+    if camera.serial:
+        stream_config.enable_device(camera.serial)
+    stream_config.enable_stream(
+        rs.stream.depth,
+        camera.width,
+        camera.height,
+        rs.format.z16,
+        camera.fps,
     )
+    stream_config.enable_stream(
+        rs.stream.color,
+        camera.width,
+        camera.height,
+        rs.format.rgb8,
+        camera.fps,
+    )
+    started = False
+    try:
+        pipeline.start(stream_config)
+        started = True
+        paired_frames = 0
+        timeouts = 0
+        first_frame_s: float | None = None
+        last_frame_s: float | None = None
+        startup_deadline_s = time.monotonic() + 5.0
+        capture_deadline_s: float | None = None
+        while True:
+            now_s = time.monotonic()
+            if first_frame_s is None and now_s >= startup_deadline_s:
+                break
+            if (
+                capture_deadline_s is not None
+                and now_s >= capture_deadline_s
+            ):
+                break
+            try:
+                frames = pipeline.wait_for_frames(timeout_ms=1000)
+            except RuntimeError:
+                timeouts += 1
+                continue
+            depth = frames.get_depth_frame()
+            color = frames.get_color_frame()
+            if not depth or not color:
+                continue
+            now_s = time.monotonic()
+            if first_frame_s is None:
+                first_frame_s = now_s
+                capture_deadline_s = now_s + 5.0
+            last_frame_s = now_s
+            paired_frames += 1
+
+        elapsed_s = (
+            0.0
+            if first_frame_s is None or last_frame_s is None
+            else last_frame_s - first_frame_s
+        )
+        rate_hz = (
+            0.0
+            if elapsed_s <= 0.0
+            else max(0, paired_frames - 1) / elapsed_s
+        )
+        minimum_rate_hz = 0.8 * camera.fps
+        stable = elapsed_s >= 4.0 and rate_hz >= minimum_rate_hz
+        if not stable:
+            return ProbeResult(
+                "depth_camera",
+                False,
+                (
+                    "D415 RGB-depth stream unstable: "
+                    f"frames={paired_frames}, rate={rate_hz:.2f} Hz, "
+                    f"timeouts={timeouts}"
+                ),
+                {
+                    "paired_frames": paired_frames,
+                    "rate_hz": rate_hz,
+                    "timeouts": timeouts,
+                },
+            )
+        return ProbeResult(
+            "depth_camera",
+            True,
+            (
+                f"{'; '.join(identities)}; synchronized RGB and depth "
+                f"{camera.width}x{camera.height} at {rate_hz:.2f} Hz"
+            ),
+            {
+                "device_count": len(devices),
+                "serial": camera.serial,
+                "rgb_ready": True,
+                "depth_ready": True,
+                "paired_frames": paired_frames,
+                "rate_hz": rate_hz,
+                "timeouts": timeouts,
+            },
+        )
+    except RuntimeError as exc:
+        return ProbeResult(
+            "depth_camera",
+            False,
+            f"D415 RGB-depth stream failed: {exc}",
+        )
+    finally:
+        if started:
+            try:
+                pipeline.stop()
+            except RuntimeError:
+                pass
 
 
 def probe_external_imu(config: ProjectConfig) -> ProbeResult:
@@ -244,6 +369,101 @@ def probe_external_imu(config: ProjectConfig) -> ProbeResult:
 
 def probe_lidar(config: ProjectConfig) -> ProbeResult:
     lidar = config.lidar
+    interface = Path("/sys/class/net") / lidar.ethernet_interface
+    if not interface.exists():
+        return ProbeResult(
+            "lidar",
+            False,
+            f"JT16 Ethernet interface is absent: {lidar.ethernet_interface}",
+        )
+    try:
+        carrier = (interface / "carrier").read_text(encoding="ascii").strip()
+    except OSError as exc:
+        return ProbeResult(
+            "lidar",
+            False,
+            f"Cannot read {lidar.ethernet_interface} carrier: {exc}",
+        )
+    if carrier != "1":
+        return ProbeResult(
+            "lidar",
+            False,
+            (
+                f"No Ethernet carrier on {lidar.ethernet_interface}; "
+                "connect and power the JT16"
+            ),
+        )
+
+    try:
+        address_result = subprocess.run(
+            [
+                "ip",
+                "-j",
+                "address",
+                "show",
+                "dev",
+                lidar.ethernet_interface,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        address_payload = json.loads(address_result.stdout)
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        return ProbeResult(
+            "lidar",
+            False,
+            f"Cannot inspect JT16 Ethernet address: {exc}",
+        )
+    addresses = {
+        entry["local"]
+        for device in address_payload
+        for entry in device.get("addr_info", ())
+        if entry.get("family") == "inet" and "local" in entry
+    }
+    if lidar.jetson_ip not in addresses:
+        return ProbeResult(
+            "lidar",
+            False,
+            (
+                f"{lidar.ethernet_interface} lacks {lidar.jetson_ip}; "
+                "run ./optflow lidar-network"
+            ),
+            {"addresses": sorted(addresses)},
+        )
+
+    try:
+        route_result = subprocess.run(
+            ["ip", "-j", "route", "get", lidar.lidar_ip],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        route_payload = json.loads(route_result.stdout)
+        route_interface = route_payload[0].get("dev")
+    except (
+        FileNotFoundError,
+        IndexError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        return ProbeResult(
+            "lidar", False, f"Cannot inspect JT16 route: {exc}"
+        )
+    if route_interface != lidar.ethernet_interface:
+        return ProbeResult(
+            "lidar",
+            False,
+            (
+                f"Traffic to {lidar.lidar_ip} uses {route_interface}, "
+                f"not {lidar.ethernet_interface}"
+            ),
+        )
+
     packet_count = 0
     source_ips: set[str] = set()
     listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -282,14 +502,19 @@ def probe_lidar(config: ProjectConfig) -> ProbeResult:
                 f"IP plan {lidar.lidar_ip} -> {lidar.jetson_ip} is {verification}"
             ),
         )
+    expected_source_seen = lidar.lidar_ip in source_ips
     return ProbeResult(
         "lidar",
-        True,
+        expected_source_seen,
         (
             f"{packet_count} UDP packets from "
-            f"{', '.join(sorted(source_ips))}"
+            f"{', '.join(sorted(source_ips))}; expected {lidar.lidar_ip}"
         ),
-        {"packet_count": packet_count, "source_ips": sorted(source_ips)},
+        {
+            "packet_count": packet_count,
+            "source_ips": sorted(source_ips),
+            "expected_source_seen": expected_source_seen,
+        },
     )
 
 

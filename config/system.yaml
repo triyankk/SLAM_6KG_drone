@@ -54,8 +54,10 @@ sensors:
     axis_map_verification: 2026-07-29 dynamic gyro correlation
   lidar:
     model: HESAI_JT16_MINI
+    ethernet_interface: enP8p1s0
     lidar_ip: 192.168.1.201
     jetson_ip: 192.168.1.100
+    jetson_prefix_length: 24
     udp_port: 2368
     packet_probe_s: 1.0
     network_values_verified: false

@@ -96,12 +96,15 @@ Connect one new sensor at a time.
 Depth camera:
 
 1. Record model and serial number.
-2. Start RGB capture with `./optflow camera --no-browser`.
-3. Verify `/healthz` stays healthy and RGB rate is stable for ten minutes.
-4. Add and verify the depth stream for ten minutes.
-5. Measure valid depth range and blind zone.
-6. Calibrate intrinsics.
-7. Measure body extrinsics.
+2. Install the D415 rule with `sudo ./optflow install-realsense-rules`.
+3. Reconnect the camera after installing the rule.
+4. Run `./optflow sensor-check` and require sustained synchronized RGB-depth.
+5. Start RGB capture with `./optflow camera --no-browser`.
+6. Verify `/healthz` stays healthy and RGB rate is stable for ten minutes.
+7. Verify the synchronized depth stream for ten minutes.
+8. Measure valid depth range and blind zone.
+9. Calibrate intrinsics.
+10. Measure body extrinsics.
 
 External IM10A:
 
@@ -117,12 +120,16 @@ External IM10A:
 
 Hesai JT16:
 
-1. Verify whether it is using Ethernet UDP or its JT16 serial path.
-2. Verify the configured IP/port or serial baud from the device.
-3. Use the official Hesai driver to decode point clouds.
-4. Confirm ring and per-point timestamp fields.
-5. Measure packet loss under full Jetson load.
-6. Measure body extrinsics.
+1. Connect lidar power and its Ethernet data cable.
+2. Run `./optflow lidar-network`.
+3. Run `./optflow sensor-check`.
+4. Require real UDP packets from the configured lidar IP; ping alone is not a
+   data test.
+5. Verify the configured IP and port from the device.
+6. Use the official Hesai driver to decode point clouds.
+7. Confirm ring and per-point timestamp fields.
+8. Measure packet loss under full Jetson load.
+9. Measure body extrinsics.
 
 Run:
 
