@@ -26,6 +26,10 @@ def test_default_config_is_conservative() -> None:
     assert "STABILIZE" in config.safety.forbidden_modes
     assert config.external_imu.baud == 9600
     assert config.external_imu.expected_rate_hz == 10
+    assert config.external_imu.body_axis_signs.x == 1
+    assert config.external_imu.body_axis_signs.y == -1
+    assert config.external_imu.body_axis_signs.z == -1
+    assert config.external_imu.axis_map_verified
 
 
 def test_external_nav_cannot_be_enabled_without_control(tmp_path: Path) -> None:

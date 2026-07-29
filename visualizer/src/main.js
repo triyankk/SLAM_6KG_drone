@@ -557,6 +557,10 @@ function compensatedFlow(flow) {
   };
 }
 
+function rosBodyPreview(rosImu) {
+  return rosImu.body_preview ?? rosImu;
+}
+
 function composeSceneAttitude(
   target,
   roll,
@@ -582,11 +586,12 @@ function composeSceneAttitude(
 }
 
 function updateRosDisplayQuaternion(rosImu) {
+  const bodyPreview = rosBodyPreview(rosImu);
   composeSceneAttitude(
     rosAttitudeQuaternion,
-    rosImu.roll_rad,
-    rosImu.pitch_rad,
-    rosImu.yaw_rad,
+    bodyPreview.roll_rad,
+    bodyPreview.pitch_rad,
+    bodyPreview.yaw_rad,
     rosYawQuaternion,
     rosPitchQuaternion,
     rosRollQuaternion,
@@ -637,7 +642,9 @@ function alignExternalImuDisplay(data) {
     "aria-label",
     "Re-align external IMU display to Cube",
   );
-  elements.rosFrameStatus.textContent = "REF ONLY - UNVERIFIED";
+  const mapStatus = rosImu.axis_map_verified ? "MEASURED" : "UNVERIFIED";
+  elements.rosFrameStatus.textContent =
+    `${rosImu.axis_map_label ?? "RAW"} REF - ${mapStatus}`;
   elements.rosFrameStatus.classList.add("is-reference-aligned");
   return true;
 }
@@ -925,18 +932,19 @@ function updateScene(data, deltaSeconds) {
 
 function updateRosImuScene(data, deltaSeconds) {
   const rosImu = data.ros_imu ?? {};
+  const bodyPreview = rosBodyPreview(rosImu);
   if (rosImu.age_ms === null || rosImu.age_ms === undefined) return;
 
   const blend =
-    1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.025);
+    1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.014);
   const rosDisplay = updateRosDisplayQuaternion(rosImu);
   rosImuRig.quaternion.slerp(rosDisplay, blend);
 
   rosAccelWorld
     .set(
-      finite(rosImu.accel_x_mss),
-      -finite(rosImu.accel_z_mss),
-      finite(rosImu.accel_y_mss),
+      finite(bodyPreview.accel_x_mss),
+      -finite(bodyPreview.accel_z_mss),
+      finite(bodyPreview.accel_y_mss),
     )
     .applyQuaternion(rosDisplay);
   const accelLength = rosAccelWorld.length();
@@ -955,9 +963,9 @@ function updateRosImuScene(data, deltaSeconds) {
 
   rosGyroWorld
     .set(
-      finite(rosImu.gyro_x_rads),
-      -finite(rosImu.gyro_z_rads),
-      finite(rosImu.gyro_y_rads),
+      finite(bodyPreview.gyro_x_rads),
+      -finite(bodyPreview.gyro_z_rads),
+      finite(bodyPreview.gyro_y_rads),
     )
     .applyQuaternion(rosDisplay);
   const gyroLength = rosGyroWorld.length();
@@ -1064,6 +1072,18 @@ function captureRecording(data) {
     ros_imu_gyro_x_rads: finite(data.ros_imu?.gyro_x_rads),
     ros_imu_gyro_y_rads: finite(data.ros_imu?.gyro_y_rads),
     ros_imu_gyro_z_rads: finite(data.ros_imu?.gyro_z_rads),
+    ros_body_roll_rad: finite(data.ros_imu?.body_preview?.roll_rad),
+    ros_body_pitch_rad: finite(data.ros_imu?.body_preview?.pitch_rad),
+    ros_body_yaw_rad: finite(data.ros_imu?.body_preview?.yaw_rad),
+    ros_body_gyro_x_rads: finite(
+      data.ros_imu?.body_preview?.gyro_x_rads,
+    ),
+    ros_body_gyro_y_rads: finite(
+      data.ros_imu?.body_preview?.gyro_y_rads,
+    ),
+    ros_body_gyro_z_rads: finite(
+      data.ros_imu?.body_preview?.gyro_z_rads,
+    ),
     flow_age_ms: data.flow.age_ms ?? "",
     imu_age_ms: data.imu?.age_ms ?? "",
     ros_imu_age_ms: data.ros_imu?.age_ms ?? "",

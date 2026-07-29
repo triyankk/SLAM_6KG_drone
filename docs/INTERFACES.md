@@ -74,6 +74,9 @@ Known current value:
 
 - H-Flow focal point and range datum are approximately +0.10 m body Z, meaning
   10 cm below the CG in ArduPilot FRD coordinates.
+- External IM10A dynamic gyro correlation measured the body-axis signs as
+  `X/-Y/-Z` on 2026-07-29. This verifies the discrete axis rotation only, not
+  the complete IMU extrinsic calibration.
 
 Still required:
 
@@ -180,4 +183,3 @@ runtime, a MAVLink router owns the UART and exposes local UDP endpoints to:
 - QGC route.
 
 Applications must not independently open the UART.
-

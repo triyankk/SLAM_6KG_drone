@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from optflow_slam.visualizer_server import (
     Im10aSource,
     MavlinkSource,
+    TELEMETRY_STREAM_HZ,
     TelemetryStore,
     _set_message_interval,
 )
@@ -152,6 +153,45 @@ def test_ros_imu_snapshot_has_explicit_unverified_extrinsics() -> None:
     assert snapshot["ros_imu"]["frame_id"] == "im10a_link"
     assert not snapshot["ros_imu"]["extrinsics_verified"]
     assert snapshot["ros_imu"]["age_ms"] is None
+
+
+def test_ros_imu_snapshot_maps_measured_body_axis_signs() -> None:
+    store = TelemetryStore(
+        "test",
+        imu_axis_signs=(1, -1, -1),
+        imu_axis_map_verified=True,
+        imu_axis_map_verification="dynamic gyro correlation",
+    )
+    store.update(
+        "ros_imu",
+        accel_x_mss=1.0,
+        accel_y_mss=2.0,
+        accel_z_mss=3.0,
+        gyro_x_rads=0.1,
+        gyro_y_rads=0.2,
+        gyro_z_rads=0.3,
+        roll_rad=0.4,
+        pitch_rad=0.5,
+        yaw_rad=0.6,
+    )
+
+    snapshot = store.snapshot()
+    ros_imu = snapshot["ros_imu"]
+
+    assert ros_imu["axis_map_label"] == "X/-Y/-Z"
+    assert ros_imu["axis_map_verified"]
+    assert ros_imu["body_preview"] == {
+        "accel_x_mss": 1.0,
+        "accel_y_mss": -2.0,
+        "accel_z_mss": -3.0,
+        "gyro_x_rads": 0.1,
+        "gyro_y_rads": -0.2,
+        "gyro_z_rads": -0.3,
+        "roll_rad": 0.4,
+        "pitch_rad": -0.5,
+        "yaw_rad": -0.6,
+    }
+    assert snapshot["visualizer_stream_rate_hz"] == TELEMETRY_STREAM_HZ
 
 
 def test_im10a_source_is_a_separate_telemetry_thread() -> None:

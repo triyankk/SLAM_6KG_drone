@@ -46,6 +46,12 @@ sensors:
     usb_pid: 0x7523
     baud: 9600
     expected_rate_hz: 10
+    body_axis_signs:
+      x: 1
+      y: -1
+      z: -1
+    axis_map_verified: true
+    axis_map_verification: 2026-07-29 dynamic gyro correlation
   lidar:
     model: HESAI_JT16_MINI
     lidar_ip: 192.168.1.201

@@ -82,8 +82,11 @@ range data. H-Flow's angular-speed-compensated X/Y flow is displayed in `m/s`;
 the raw angular rates remain visible as a diagnostic. The corner view animates
 the external IM10A using the future `sensor_msgs/Imu` contract. Until ROS 2 is
 installed, that stream is decoded directly from `/dev/imu_usb`. Its display is
-reference-aligned to Cube at startup, while its sensor-to-body extrinsics remain
-explicitly unverified.
+mapped through the measured `X/-Y/-Z` body-axis signs and reference-aligned to
+Cube at startup. Full sensor-to-body extrinsics remain explicitly unverified.
+The browser transport runs at 60 Hz, but the current factory IM10A stream remains
+10 Hz; increasing the real sensor rate requires the reversible baud/rate
+configuration and recovery workflow.
 
 The visualizer owns both `/dev/ttyTHS1` and `/dev/imu_usb` while it runs, so
 stop it before starting another direct sensor process. Use `--demo` to exercise

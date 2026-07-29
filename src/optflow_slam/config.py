@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,13 @@ class DepthCameraConfig:
 
 
 @dataclass(frozen=True)
+class AxisSignsConfig:
+    x: int
+    y: int
+    z: int
+
+
+@dataclass(frozen=True)
 class ImuConfig:
     model: str
     symlink: str
@@ -57,6 +65,9 @@ class ImuConfig:
     usb_pid: int
     baud: int
     expected_rate_hz: float
+    body_axis_signs: AxisSignsConfig
+    axis_map_verified: bool
+    axis_map_verification: str
 
 
 @dataclass(frozen=True)
@@ -158,6 +169,7 @@ def load_config(path: str | Path) -> ProjectConfig:
     sensors = _mapping(raw, "sensors")
     camera = _mapping(sensors, "depth_camera")
     imu = _mapping(sensors, "external_imu")
+    imu_axis_signs = _mapping(imu, "body_axis_signs")
     lidar = _mapping(sensors, "lidar")
     calibration = _mapping(raw, "calibration")
     navigation = _mapping(raw, "navigation")
@@ -205,6 +217,23 @@ def load_config(path: str | Path) -> ProjectConfig:
     if nav.external_nav_to_cube_enabled and not nav.autonomous_control_enabled:
         raise ConfigError(
             "external_nav_to_cube_enabled requires autonomous_control_enabled"
+        )
+
+    parsed_imu_axis_signs = AxisSignsConfig(
+        x=int(_required(imu_axis_signs, "x")),
+        y=int(_required(imu_axis_signs, "y")),
+        z=int(_required(imu_axis_signs, "z")),
+    )
+    axis_sign_values = (
+        parsed_imu_axis_signs.x,
+        parsed_imu_axis_signs.y,
+        parsed_imu_axis_signs.z,
+    )
+    if any(value not in (-1, 1) for value in axis_sign_values):
+        raise ConfigError("external_imu body-axis signs must be -1 or 1")
+    if math.prod(axis_sign_values) != 1:
+        raise ConfigError(
+            "external_imu body-axis signs must define a proper rotation"
         )
 
     return ProjectConfig(
@@ -262,6 +291,11 @@ def load_config(path: str | Path) -> ProjectConfig:
             expected_rate_hz=_positive(
                 _required(imu, "expected_rate_hz"),
                 "external_imu.expected_rate_hz",
+            ),
+            body_axis_signs=parsed_imu_axis_signs,
+            axis_map_verified=bool(_required(imu, "axis_map_verified")),
+            axis_map_verification=str(
+                _required(imu, "axis_map_verification")
             ),
         ),
         lidar=LidarConfig(

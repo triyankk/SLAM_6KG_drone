@@ -24,6 +24,7 @@ from .paths import CONFIG_DIR, VISUALIZER_DIR
 
 DEFAULT_STATIC_DIR = VISUALIZER_DIR / "dist"
 DEFAULT_CONFIG = CONFIG_DIR / "system.yaml"
+TELEMETRY_STREAM_HZ = 60.0
 
 
 class TelemetryStore:
@@ -33,9 +34,13 @@ class TelemetryStore:
         self,
         source: str,
         cube_mount: dict[str, Any] | None = None,
+        imu_axis_signs: tuple[int, int, int] = (1, 1, 1),
+        imu_axis_map_verified: bool = False,
+        imu_axis_map_verification: str = "not measured",
     ) -> None:
         now = time.monotonic()
         self._lock = threading.Lock()
+        self._imu_axis_signs = imu_axis_signs
         self._state: dict[str, Any] = {
             "sequence": 0,
             "source": source,
@@ -92,6 +97,9 @@ class TelemetryStore:
                 "contract": "sensor_msgs/Imu",
                 "frame_id": "im10a_link",
                 "extrinsics_verified": False,
+                "axis_map_verified": imu_axis_map_verified,
+                "axis_map_verification": imu_axis_map_verification,
+                "axis_map_label": self._axis_map_label(imu_axis_signs),
                 "sample_rate_hz": 0.0,
                 "checksum_errors": 0,
                 "accel_x_mss": 0.0,
@@ -116,7 +124,16 @@ class TelemetryStore:
                 "ahrs_orientation_name": "None",
             },
             "started_monotonic": now,
+            "visualizer_stream_rate_hz": TELEMETRY_STREAM_HZ,
         }
+
+    @staticmethod
+    def _axis_map_label(signs: tuple[int, int, int]) -> str:
+        labels = ("X", "Y", "Z")
+        return "/".join(
+            label if sign > 0 else f"-{label}"
+            for label, sign in zip(labels, signs)
+        )
 
     def update(self, section: str, **values: Any) -> None:
         with self._lock:
@@ -148,6 +165,19 @@ class TelemetryStore:
 
         state["server_monotonic_s"] = now
         state["uptime_s"] = round(now - state.pop("started_monotonic"), 3)
+        ros_imu = state["ros_imu"]
+        sign_x, sign_y, sign_z = self._imu_axis_signs
+        ros_imu["body_preview"] = {
+            "accel_x_mss": sign_x * ros_imu["accel_x_mss"],
+            "accel_y_mss": sign_y * ros_imu["accel_y_mss"],
+            "accel_z_mss": sign_z * ros_imu["accel_z_mss"],
+            "gyro_x_rads": sign_x * ros_imu["gyro_x_rads"],
+            "gyro_y_rads": sign_y * ros_imu["gyro_y_rads"],
+            "gyro_z_rads": sign_z * ros_imu["gyro_z_rads"],
+            "roll_rad": sign_x * ros_imu["roll_rad"],
+            "pitch_rad": sign_y * ros_imu["pitch_rad"],
+            "yaw_rad": sign_z * ros_imu["yaw_rad"],
+        }
         state["link"]["age_ms"] = age_ms(
             state["link"].pop("last_packet_monotonic")
         )
@@ -646,7 +676,7 @@ def make_handler(
                     )
                     self.wfile.write(f"data:{payload}\n\n".encode("utf-8"))
                     self.wfile.flush()
-                    time.sleep(1.0 / 30.0)
+                    time.sleep(1.0 / TELEMETRY_STREAM_HZ)
             except (BrokenPipeError, ConnectionResetError):
                 return
 
@@ -696,6 +726,15 @@ def main() -> int:
             "ahrs_orientation": mount.ahrs_orientation,
             "ahrs_orientation_name": mount.ahrs_orientation_name,
         },
+        imu_axis_signs=(
+            config.external_imu.body_axis_signs.x,
+            config.external_imu.body_axis_signs.y,
+            config.external_imu.body_axis_signs.z,
+        ),
+        imu_axis_map_verified=config.external_imu.axis_map_verified,
+        imu_axis_map_verification=(
+            config.external_imu.axis_map_verification
+        ),
     )
     if args.demo:
         sources: list[threading.Thread] = [DemoSource(store, stop_event)]
