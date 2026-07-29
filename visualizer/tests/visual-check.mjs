@@ -73,7 +73,7 @@ try {
       telemetry.rosStatus !== "LIVE" ||
       telemetry.rosRate !== "40.0 Hz" ||
       telemetry.rosRoll === "0.0" ||
-      telemetry.rosFrameStatus !== "REF ONLY - UNVERIFIED" ||
+      telemetry.rosFrameStatus !== "Y/X/-Z REF - UNVERIFIED" ||
       telemetry.alignImuDisabled
     ) {
       throw new Error(`${viewport.name}: ROS IMU inset did not update`);

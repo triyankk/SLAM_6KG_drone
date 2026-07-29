@@ -92,6 +92,12 @@ class TelemetryStore:
                 "contract": "sensor_msgs/Imu",
                 "frame_id": "im10a_link",
                 "extrinsics_verified": False,
+                "axis_map_verified": False,
+                "body_axis_map": {
+                    "x": "sensor_y",
+                    "y": "sensor_x",
+                    "z": "-sensor_z",
+                },
                 "sample_rate_hz": 0.0,
                 "checksum_errors": 0,
                 "accel_x_mss": 0.0,
@@ -104,6 +110,7 @@ class TelemetryStore:
                 "pitch_rad": 0.0,
                 "yaw_rad": 0.0,
                 "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "orientation_valid": False,
                 "updated_monotonic": None,
             },
             "cube_mount": cube_mount
@@ -492,6 +499,7 @@ class Im10aSource(threading.Thread):
                             values: dict[str, Any] = {
                                 **common,
                                 "quaternion_wxyz": list(measurement.values),
+                                "orientation_valid": True,
                             }
                             if rate_hz > 0:
                                 values["sample_rate_hz"] = rate_hz

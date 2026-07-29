@@ -151,6 +151,13 @@ def test_ros_imu_snapshot_has_explicit_unverified_extrinsics() -> None:
     assert snapshot["ros_imu"]["contract"] == "sensor_msgs/Imu"
     assert snapshot["ros_imu"]["frame_id"] == "im10a_link"
     assert not snapshot["ros_imu"]["extrinsics_verified"]
+    assert not snapshot["ros_imu"]["axis_map_verified"]
+    assert snapshot["ros_imu"]["body_axis_map"] == {
+        "x": "sensor_y",
+        "y": "sensor_x",
+        "z": "-sensor_z",
+    }
+    assert not snapshot["ros_imu"]["orientation_valid"]
     assert snapshot["ros_imu"]["age_ms"] is None
 
 

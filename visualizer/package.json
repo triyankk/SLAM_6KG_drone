@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "test:frame": "node tests/imu-frame-check.mjs"
   },
   "dependencies": {
     "lucide": "1.27.0",
