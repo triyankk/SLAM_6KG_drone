@@ -98,7 +98,7 @@ def test_message_interval_request_waits_for_cube_ack() -> None:
     assert master.mav.command is not None
 
 
-def test_legacy_optical_flow_message_uses_base_rate_fields() -> None:
+def test_legacy_optical_flow_message_keeps_pixel_and_compensated_fields() -> None:
     store = TelemetryStore("test")
     source = MavlinkSource(store, Event(), "/dev/null", 921600)
     message = SimpleNamespace(
@@ -113,10 +113,12 @@ def test_legacy_optical_flow_message_uses_base_rate_fields() -> None:
     source._handle_message(message, mavutil=None)
     snapshot = store.snapshot()
 
-    assert snapshot["flow"]["rate_x_rads"] == 2.0
-    assert snapshot["flow"]["rate_y_rads"] == -3.0
-    assert snapshot["flow"]["comp_x"] == 0.25
-    assert snapshot["flow"]["comp_y"] == -0.5
+    assert snapshot["flow"]["delta_x_dpix"] == 2
+    assert snapshot["flow"]["delta_y_dpix"] == -3
+    assert snapshot["flow"]["rate_x_rads"] == 0.0
+    assert snapshot["flow"]["rate_y_rads"] == 0.0
+    assert snapshot["flow"]["comp_x_mps"] == 0.25
+    assert snapshot["flow"]["comp_y_mps"] == -0.5
     assert snapshot["flow"]["quality"] == 137
 
 

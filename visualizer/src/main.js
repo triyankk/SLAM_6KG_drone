@@ -5,6 +5,7 @@ import {
   Circle,
   createIcons,
   Download,
+  LocateFixed,
   Pause,
   Play,
   RotateCcw,
@@ -17,6 +18,7 @@ const icons = {
   Box,
   Circle,
   Download,
+  LocateFixed,
   Pause,
   Play,
   RotateCcw,
@@ -39,6 +41,7 @@ const elements = {
   flowX: document.querySelector("#flowX"),
   flowY: document.querySelector("#flowY"),
   flowMagnitude: document.querySelector("#flowMagnitude"),
+  flowAngularRate: document.querySelector("#flowAngularRate"),
   flowAge: document.querySelector("#flowAge"),
   qualityValue: document.querySelector("#qualityValue"),
   qualityFill: document.querySelector("#qualityFill"),
@@ -69,8 +72,10 @@ const elements = {
   rosYawValue: document.querySelector("#rosYawValue"),
   rosImuRate: document.querySelector("#rosImuRate"),
   rosImuAge: document.querySelector("#rosImuAge"),
+  rosFrameStatus: document.querySelector("#rosFrameStatus"),
   pauseButton: document.querySelector("#pauseButton"),
   resetButton: document.querySelector("#resetButton"),
+  alignImuButton: document.querySelector("#alignImuButton"),
   perspectiveButton: document.querySelector("#perspectiveButton"),
   topButton: document.querySelector("#topButton"),
   vectorScale: document.querySelector("#vectorScale"),
@@ -482,6 +487,9 @@ const rosYawQuaternion = new THREE.Quaternion();
 const rosPitchQuaternion = new THREE.Quaternion();
 const rosRollQuaternion = new THREE.Quaternion();
 const rosAttitudeQuaternion = new THREE.Quaternion();
+const rosDisplayQuaternion = new THREE.Quaternion();
+const rosDisplayCorrection = new THREE.Quaternion();
+const rosDisplayEuler = new THREE.Euler(0, 0, 0, "YZX");
 const worldFlow = new THREE.Vector3();
 const sensorWorld = new THREE.Vector3();
 const forwardWorld = new THREE.Vector3();
@@ -505,6 +513,7 @@ let currentView = "perspective";
 let lastUiSequence = -1;
 let lastFrameTime = performance.now();
 let traceDirty = true;
+let rosDisplayAligned = false;
 const flowHistory = [];
 const rootStyle = getComputedStyle(document.documentElement);
 const traceColors = {
@@ -539,6 +548,98 @@ resetPerspective();
 
 function finite(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
+}
+
+function compensatedFlow(flow) {
+  return {
+    x: finite(flow.comp_x_mps ?? flow.comp_x),
+    y: finite(flow.comp_y_mps ?? flow.comp_y),
+  };
+}
+
+function composeSceneAttitude(
+  target,
+  roll,
+  pitch,
+  yaw,
+  yawPart,
+  pitchPart,
+  rollPart,
+) {
+  yawPart.setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    -finite(yaw),
+  );
+  pitchPart.setFromAxisAngle(
+    new THREE.Vector3(0, 0, 1),
+    finite(pitch),
+  );
+  rollPart.setFromAxisAngle(
+    new THREE.Vector3(1, 0, 0),
+    finite(roll),
+  );
+  return target.copy(yawPart).multiply(pitchPart).multiply(rollPart);
+}
+
+function updateRosDisplayQuaternion(rosImu) {
+  composeSceneAttitude(
+    rosAttitudeQuaternion,
+    rosImu.roll_rad,
+    rosImu.pitch_rad,
+    rosImu.yaw_rad,
+    rosYawQuaternion,
+    rosPitchQuaternion,
+    rosRollQuaternion,
+  );
+  if (rosDisplayAligned) {
+    return rosDisplayQuaternion
+      .copy(rosDisplayCorrection)
+      .multiply(rosAttitudeQuaternion);
+  }
+  return rosDisplayQuaternion.copy(rosAttitudeQuaternion);
+}
+
+function canAlignExternalImu(data) {
+  const attitudeAge = data?.attitude?.age_ms;
+  const rosAge = data?.ros_imu?.age_ms;
+  return (
+    data?.ros_imu?.connected &&
+    attitudeAge !== null &&
+    attitudeAge !== undefined &&
+    attitudeAge < 500 &&
+    rosAge !== null &&
+    rosAge !== undefined &&
+    rosAge < 500
+  );
+}
+
+function alignExternalImuDisplay(data) {
+  if (!canAlignExternalImu(data)) return false;
+  const attitude = data.attitude;
+  const rosImu = data.ros_imu;
+  composeSceneAttitude(
+    attitudeQuaternion,
+    attitude.roll_rad,
+    attitude.pitch_rad,
+    attitude.yaw_rad,
+    yawQuaternion,
+    pitchQuaternion,
+    rollQuaternion,
+  );
+  updateRosDisplayQuaternion(rosImu);
+  rosDisplayCorrection
+    .copy(attitudeQuaternion)
+    .multiply(rosAttitudeQuaternion.clone().invert());
+  rosDisplayAligned = true;
+  elements.alignImuButton.classList.add("is-active");
+  elements.alignImuButton.title = "Re-align external IMU display to Cube";
+  elements.alignImuButton.setAttribute(
+    "aria-label",
+    "Re-align external IMU display to Cube",
+  );
+  elements.rosFrameStatus.textContent = "REF ONLY - UNVERIFIED";
+  elements.rosFrameStatus.classList.add("is-reference-aligned");
+  return true;
 }
 
 function formatAge(value) {
@@ -593,12 +694,17 @@ function updateTelemetryUi(data) {
       : "Offline";
   elements.linkDetail.textContent = data.link.detail;
 
-  const flowX = finite(flow.rate_x_rads);
-  const flowY = finite(flow.rate_y_rads);
+  const flowVector = compensatedFlow(flow);
+  const flowX = flowVector.x;
+  const flowY = flowVector.y;
   const magnitude = Math.hypot(flowX, flowY);
+  const flowRateX = finite(flow.rate_x_rads);
+  const flowRateY = finite(flow.rate_y_rads);
   elements.flowX.textContent = flowX.toFixed(3);
   elements.flowY.textContent = flowY.toFixed(3);
-  elements.flowMagnitude.textContent = `${magnitude.toFixed(3)} rad/s`;
+  elements.flowMagnitude.textContent = `${magnitude.toFixed(3)} m/s`;
+  elements.flowAngularRate.textContent =
+    `${flowRateX.toFixed(3)} / ${flowRateY.toFixed(3)} rad/s`;
   elements.flowAge.textContent = formatAge(flow.age_ms);
 
   const quality = Math.max(0, Math.min(255, finite(flow.quality)));
@@ -664,15 +770,18 @@ function updateTelemetryUi(data) {
     : rosImu.connected
       ? "STALE"
       : "OFFLINE";
+  const rosDisplay = updateRosDisplayQuaternion(rosImu);
+  rosDisplayEuler.setFromQuaternion(rosDisplay, "YZX");
   elements.rosRollValue.textContent =
-    radiansToDegrees(rosImu.roll_rad).toFixed(1);
+    radiansToDegrees(rosDisplayEuler.x).toFixed(1);
   elements.rosPitchValue.textContent =
-    radiansToDegrees(rosImu.pitch_rad).toFixed(1);
+    radiansToDegrees(rosDisplayEuler.z).toFixed(1);
   elements.rosYawValue.textContent =
-    radiansToDegrees(rosImu.yaw_rad).toFixed(1);
+    radiansToDegrees(-rosDisplayEuler.y).toFixed(1);
   elements.rosImuRate.textContent =
     `${finite(rosImu.sample_rate_hz).toFixed(1)} Hz`;
   elements.rosImuAge.textContent = formatAge(rosAge);
+  elements.alignImuButton.disabled = !canAlignExternalImu(data);
 }
 
 function updateScene(data, deltaSeconds) {
@@ -696,22 +805,15 @@ function updateScene(data, deltaSeconds) {
     finite(cubeMount.yaw_ccw_deg),
   );
 
-  yawQuaternion.setFromAxisAngle(
-    new THREE.Vector3(0, 1, 0),
-    -finite(attitude.yaw_rad),
+  composeSceneAttitude(
+    attitudeQuaternion,
+    attitude.roll_rad,
+    attitude.pitch_rad,
+    attitude.yaw_rad,
+    yawQuaternion,
+    pitchQuaternion,
+    rollQuaternion,
   );
-  pitchQuaternion.setFromAxisAngle(
-    new THREE.Vector3(0, 0, 1),
-    finite(attitude.pitch_rad),
-  );
-  rollQuaternion.setFromAxisAngle(
-    new THREE.Vector3(1, 0, 0),
-    finite(attitude.roll_rad),
-  );
-  attitudeQuaternion
-    .copy(yawQuaternion)
-    .multiply(pitchQuaternion)
-    .multiply(rollQuaternion);
   drone.quaternion.slerp(attitudeQuaternion, attitudeBlend);
   drone.position.y += (altitude - drone.position.y) * altitudeBlend;
 
@@ -728,8 +830,9 @@ function updateScene(data, deltaSeconds) {
   footprint.position.x += (sensorWorld.x - footprint.position.x) * 0.2;
   footprint.position.z += (sensorWorld.z - footprint.position.z) * 0.2;
 
-  const flowX = finite(flow.rate_x_rads);
-  const flowY = finite(flow.rate_y_rads);
+  const flowVector = compensatedFlow(flow);
+  const flowX = flowVector.x;
+  const flowY = flowVector.y;
   const magnitude = Math.hypot(flowX, flowY);
   worldFlow.set(flowX, 0, flowY).applyQuaternion(yawQuaternion);
   if (magnitude > 0.0005) {
@@ -826,23 +929,8 @@ function updateRosImuScene(data, deltaSeconds) {
 
   const blend =
     1 - Math.exp(-THREE.MathUtils.clamp(deltaSeconds, 0, 0.1) / 0.025);
-  rosYawQuaternion.setFromAxisAngle(
-    new THREE.Vector3(0, 1, 0),
-    -finite(rosImu.yaw_rad),
-  );
-  rosPitchQuaternion.setFromAxisAngle(
-    new THREE.Vector3(0, 0, 1),
-    finite(rosImu.pitch_rad),
-  );
-  rosRollQuaternion.setFromAxisAngle(
-    new THREE.Vector3(1, 0, 0),
-    finite(rosImu.roll_rad),
-  );
-  rosAttitudeQuaternion
-    .copy(rosYawQuaternion)
-    .multiply(rosPitchQuaternion)
-    .multiply(rosRollQuaternion);
-  rosImuRig.quaternion.slerp(rosAttitudeQuaternion, blend);
+  const rosDisplay = updateRosDisplayQuaternion(rosImu);
+  rosImuRig.quaternion.slerp(rosDisplay, blend);
 
   rosAccelWorld
     .set(
@@ -850,7 +938,7 @@ function updateRosImuScene(data, deltaSeconds) {
       -finite(rosImu.accel_z_mss),
       finite(rosImu.accel_y_mss),
     )
-    .applyQuaternion(rosAttitudeQuaternion);
+    .applyQuaternion(rosDisplay);
   const accelLength = rosAccelWorld.length();
   if (accelLength > 0.02) {
     rosAccelWorld.normalize();
@@ -871,7 +959,7 @@ function updateRosImuScene(data, deltaSeconds) {
       -finite(rosImu.gyro_z_rads),
       finite(rosImu.gyro_y_rads),
     )
-    .applyQuaternion(rosAttitudeQuaternion);
+    .applyQuaternion(rosDisplay);
   const gyroLength = rosGyroWorld.length();
   if (gyroLength > 0.002) {
     rosGyroWorld.normalize();
@@ -889,10 +977,11 @@ function updateRosImuScene(data, deltaSeconds) {
 
 function appendHistory(data) {
   const now = performance.now() / 1000;
+  const flowVector = compensatedFlow(data.flow);
   flowHistory.push({
     time: now,
-    x: finite(data.flow.rate_x_rads),
-    y: finite(data.flow.rate_y_rads),
+    x: flowVector.x,
+    y: flowVector.y,
   });
   while (flowHistory.length && now - flowHistory[0].time > 10) {
     flowHistory.shift();
@@ -949,6 +1038,10 @@ function captureRecording(data) {
   recordedRows.push({
     client_time_iso: new Date().toISOString(),
     source: data.source,
+    flow_x_mps: finite(data.flow.comp_x_mps ?? data.flow.comp_x),
+    flow_y_mps: finite(data.flow.comp_y_mps ?? data.flow.comp_y),
+    flow_x_dpix: finite(data.flow.delta_x_dpix),
+    flow_y_dpix: finite(data.flow.delta_y_dpix),
     flow_x_rads: finite(data.flow.rate_x_rads),
     flow_y_rads: finite(data.flow.rate_y_rads),
     quality: finite(data.flow.quality),
@@ -1016,6 +1109,9 @@ elements.pauseButton.addEventListener("click", () => {
 });
 
 elements.resetButton.addEventListener("click", resetPerspective);
+elements.alignImuButton.addEventListener("click", () => {
+  alignExternalImuDisplay(latestTelemetry ?? displayTelemetry);
+});
 elements.perspectiveButton.addEventListener("click", resetPerspective);
 elements.topButton.addEventListener("click", setTopView);
 elements.vectorScale.addEventListener("input", () => {
@@ -1039,7 +1135,9 @@ elements.downloadButton.addEventListener("click", downloadCsv);
 const eventSource = new EventSource("/api/stream");
 eventSource.onmessage = (event) => {
   try {
-    latestTelemetry = JSON.parse(event.data);
+    const telemetry = JSON.parse(event.data);
+    if (!rosDisplayAligned) alignExternalImuDisplay(telemetry);
+    latestTelemetry = telemetry;
     if (!paused) {
       displayTelemetry = latestTelemetry;
       appendHistory(displayTelemetry);

@@ -40,6 +40,8 @@ try {
     const telemetry = await page.evaluate(() => ({
       flowX: document.querySelector("#flowX")?.textContent,
       flowY: document.querySelector("#flowY")?.textContent,
+      flowUnit: document.querySelector(".flow-axis .unit")?.textContent,
+      flowAngularRate: document.querySelector("#flowAngularRate")?.textContent,
       range: document.querySelector("#rangeValue")?.textContent,
       quality: document.querySelector("#qualityValue")?.textContent,
       accelZ: document.querySelector("#accelZ")?.textContent,
@@ -48,10 +50,18 @@ try {
       rosStatus: document.querySelector("#rosImuStatus")?.textContent,
       rosRate: document.querySelector("#rosImuRate")?.textContent,
       rosRoll: document.querySelector("#rosRollValue")?.textContent,
+      rosFrameStatus: document.querySelector("#rosFrameStatus")?.textContent,
+      alignImuDisabled: document.querySelector("#alignImuButton")?.disabled,
       cubeMount: document.querySelector("#cubeMountValue")?.textContent,
     }));
     if (telemetry.flowX === "0.000" && telemetry.flowY === "0.000") {
       throw new Error(`${viewport.name}: demo flow did not update`);
+    }
+    if (
+      telemetry.flowUnit !== "m/s" ||
+      !telemetry.flowAngularRate?.includes("rad/s")
+    ) {
+      throw new Error(`${viewport.name}: flow units are not explicit`);
     }
     if (
       telemetry.accelZ === "0.00" ||
@@ -62,7 +72,9 @@ try {
     if (
       telemetry.rosStatus !== "LIVE" ||
       telemetry.rosRate !== "40.0 Hz" ||
-      telemetry.rosRoll === "0.0"
+      telemetry.rosRoll === "0.0" ||
+      telemetry.rosFrameStatus !== "REF ONLY - UNVERIFIED" ||
+      telemetry.alignImuDisabled
     ) {
       throw new Error(`${viewport.name}: ROS IMU inset did not update`);
     }
@@ -122,7 +134,20 @@ try {
           rect.bottom > window.innerHeight + 1
         )
         .map(([selector]) => selector);
-      return { rectangles, overlap, outOfViewport };
+      const clippedControls = Array.from(
+        document.querySelectorAll(".controlbar > *"),
+      )
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return (
+            rect.left < controls.left - 1 ||
+            rect.right > controls.right + 1 ||
+            rect.top < controls.top - 1 ||
+            rect.bottom > controls.bottom + 1
+          );
+        })
+        .map((element) => element.id || element.className);
+      return { rectangles, overlap, outOfViewport, clippedControls };
     });
     if (layout.overlap) {
       throw new Error(`${viewport.name}: control bar overlaps telemetry`);
@@ -130,6 +155,11 @@ try {
     if (layout.outOfViewport.length) {
       throw new Error(
         `${viewport.name}: out-of-viewport UI: ${layout.outOfViewport.join(", ")}`,
+      );
+    }
+    if (layout.clippedControls.length) {
+      throw new Error(
+        `${viewport.name}: clipped controls: ${layout.clippedControls.join(", ")}`,
       );
     }
 
@@ -196,6 +226,14 @@ try {
     }
     await page.locator("#pauseButton").click();
     await page.locator("#perspectiveButton").click();
+    await page.locator("#alignImuButton").click();
+    if (
+      !(await page.locator("#alignImuButton").evaluate((button) =>
+        button.classList.contains("is-active"),
+      ))
+    ) {
+      throw new Error(`${viewport.name}: IMU reference alignment did not run`);
+    }
 
     const screenshot = path.join(outputDir, `${viewport.name}.png`);
     await page.screenshot({ path: screenshot, fullPage: true });

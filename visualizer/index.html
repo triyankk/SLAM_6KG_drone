@@ -33,24 +33,28 @@
       <aside class="telemetry-panel" aria-label="Optical-flow telemetry">
         <section class="telemetry-section flow-section">
           <div class="section-heading">
-            <span>RAW ANGULAR FLOW</span>
+            <span>COMPENSATED FLOW</span>
             <span id="flowAge" class="sample-age">-- ms</span>
           </div>
           <div class="flow-readout">
             <div class="flow-axis flow-axis-x">
               <span class="axis-name">X</span>
               <strong id="flowX">0.000</strong>
-              <span class="unit">rad/s</span>
+              <span class="unit">m/s</span>
             </div>
             <div class="flow-axis flow-axis-y">
               <span class="axis-name">Y</span>
               <strong id="flowY">0.000</strong>
-              <span class="unit">rad/s</span>
+              <span class="unit">m/s</span>
             </div>
           </div>
           <div class="metric-row">
             <span>Magnitude</span>
-            <strong id="flowMagnitude">0.000 rad/s</strong>
+            <strong id="flowMagnitude">0.000 m/s</strong>
+          </div>
+          <div class="metric-row flow-rate-row">
+            <span>Angular X / Y</span>
+            <strong id="flowAngularRate">0.000 / 0.000 rad/s</strong>
           </div>
         </section>
 
@@ -198,6 +202,13 @@
           id="rosImuScene"
           aria-label="Live external IMU orientation"
         ></canvas>
+        <span
+          id="rosFrameStatus"
+          class="ros-frame-status"
+          title="External IMU sensor-to-body extrinsics are not calibrated"
+        >
+          RAW FRAME - UNVERIFIED
+        </span>
         <div class="ros-imu-footer">
           <div class="ros-imu-attitude">
             <span>R <strong id="rosRollValue">0.0</strong></span>
@@ -214,7 +225,7 @@
       <div class="axis-legend" aria-label="Aircraft body axes">
         <span class="axis-forward"><i></i>FORWARD +X</span>
         <span class="axis-right"><i></i>RIGHT +Y</span>
-        <span class="axis-flow"><i></i>RAW FLOW</span>
+        <span class="axis-flow"><i></i>FLOW m/s</span>
         <span class="axis-accel"><i></i>ACCEL</span>
         <span class="axis-gyro"><i></i>GYRO</span>
       </div>
@@ -237,6 +248,16 @@
           aria-label="Reset camera"
         >
           <i data-lucide="rotate-ccw"></i>
+        </button>
+        <button
+          id="alignImuButton"
+          class="icon-button"
+          type="button"
+          title="Align external IMU display to Cube"
+          aria-label="Align external IMU display to Cube"
+          disabled
+        >
+          <i data-lucide="locate-fixed"></i>
         </button>
         <div class="view-toggle" role="group" aria-label="Camera view">
           <button

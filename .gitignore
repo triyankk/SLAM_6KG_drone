@@ -31,3 +31,4 @@ ros_ws/log/
 visualizer/node_modules/
 visualizer/dist/
 visualizer/test-output/
+test-output/

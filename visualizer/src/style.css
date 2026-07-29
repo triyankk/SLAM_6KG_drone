@@ -255,6 +255,10 @@ input {
   white-space: nowrap;
 }
 
+.flow-rate-row {
+  margin-top: 6px;
+}
+
 .quality-track {
   height: 7px;
   margin-top: 13px;
@@ -463,6 +467,28 @@ input {
   border-radius: 6px;
   background: rgba(22, 25, 23, 0.94);
   backdrop-filter: blur(12px);
+}
+
+.ros-frame-status {
+  position: absolute;
+  z-index: 2;
+  top: 43px;
+  left: 10px;
+  padding: 4px 6px;
+  border: 1px solid rgba(240, 180, 75, 0.46);
+  border-radius: 3px;
+  color: #ffd58e;
+  background: rgba(35, 29, 18, 0.9);
+  font-size: 8px;
+  font-weight: 760;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.ros-frame-status.is-reference-aligned {
+  border-color: rgba(112, 165, 255, 0.5);
+  color: #a8c7ff;
+  background: rgba(21, 28, 39, 0.9);
 }
 
 .ros-imu-heading,
@@ -824,6 +850,13 @@ input[type="range"] {
     grid-template-rows: 30px minmax(0, 1fr) 38px;
   }
 
+  .ros-frame-status {
+    top: 36px;
+    left: 7px;
+    padding: 3px 4px;
+    font-size: 7px;
+  }
+
   .ros-imu-heading,
   .ros-imu-footer {
     padding: 0 8px;
@@ -899,6 +932,8 @@ input[type="range"] {
 
   .controlbar {
     bottom: 246px;
+    gap: 2px;
+    padding: 4px;
   }
 
   .scale-control span {
@@ -906,15 +941,17 @@ input[type="range"] {
   }
 
   .scale-control {
-    grid-template-columns: 58px 29px;
+    grid-template-columns: 48px 26px;
+    gap: 4px;
+    padding: 0 4px;
   }
 
   input[type="range"] {
-    width: 58px;
+    width: 48px;
   }
 
   .icon-button {
-    width: 35px;
+    width: 31px;
     height: 35px;
   }
 }

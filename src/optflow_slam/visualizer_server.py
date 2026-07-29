@@ -51,10 +51,12 @@ class TelemetryStore:
                 "mode": "UNKNOWN",
             },
             "flow": {
+                "delta_x_dpix": 0,
+                "delta_y_dpix": 0,
                 "rate_x_rads": 0.0,
                 "rate_y_rads": 0.0,
-                "comp_x": 0.0,
-                "comp_y": 0.0,
+                "comp_x_mps": 0.0,
+                "comp_y_mps": 0.0,
                 "quality": 0,
                 "updated_monotonic": None,
             },
@@ -341,14 +343,16 @@ class MavlinkSource(threading.Thread):
                 updated_monotonic=now,
             )
         elif message_type == "OPTICAL_FLOW":
-            rate_x = getattr(message, "flow_rate_x", message.flow_x)
-            rate_y = getattr(message, "flow_rate_y", message.flow_y)
+            rate_x = getattr(message, "flow_rate_x", 0.0)
+            rate_y = getattr(message, "flow_rate_y", 0.0)
             self.store.update(
                 "flow",
+                delta_x_dpix=int(message.flow_x),
+                delta_y_dpix=int(message.flow_y),
                 rate_x_rads=float(rate_x),
                 rate_y_rads=float(rate_y),
-                comp_x=float(message.flow_comp_m_x),
-                comp_y=float(message.flow_comp_m_y),
+                comp_x_mps=float(message.flow_comp_m_x),
+                comp_y_mps=float(message.flow_comp_m_y),
                 quality=int(message.quality),
                 updated_monotonic=now,
             )
@@ -532,10 +536,12 @@ class DemoSource(threading.Thread):
             self.store.mark_packet()
             self.store.update(
                 "flow",
+                delta_x_dpix=round(flow_x * 100),
+                delta_y_dpix=round(flow_y * 100),
                 rate_x_rads=flow_x,
                 rate_y_rads=flow_y,
-                comp_x=flow_x * 0.86,
-                comp_y=flow_y * 0.86,
+                comp_x_mps=flow_x * 0.86,
+                comp_y_mps=flow_y * 0.86,
                 quality=round(176 + 44 * math.sin(phase * 0.31)),
                 updated_monotonic=now,
             )

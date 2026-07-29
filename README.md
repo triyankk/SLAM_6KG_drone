@@ -78,10 +78,12 @@ Run the live drone-motion visualizer:
 
 Open `http://127.0.0.1:8765` on the Jetson or use the Jetson's LAN address from
 another device. The main aircraft view uses Cube attitude, Cube IMU, H-Flow, and
-range data. The corner view animates the external IM10A using the future
-`sensor_msgs/Imu` contract. Until ROS 2 is installed, that stream is decoded
-directly from `/dev/imu_usb` and is explicitly marked as having unverified body
-extrinsics.
+range data. H-Flow's angular-speed-compensated X/Y flow is displayed in `m/s`;
+the raw angular rates remain visible as a diagnostic. The corner view animates
+the external IM10A using the future `sensor_msgs/Imu` contract. Until ROS 2 is
+installed, that stream is decoded directly from `/dev/imu_usb`. Its display is
+reference-aligned to Cube at startup, while its sensor-to-body extrinsics remain
+explicitly unverified.
 
 The visualizer owns both `/dev/ttyTHS1` and `/dev/imu_usb` while it runs, so
 stop it before starting another direct sensor process. Use `--demo` to exercise
