@@ -1,0 +1,528 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #101314;
+  color: #f4f6f5;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #101314;
+}
+
+button {
+  font: inherit;
+}
+
+.assist-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.topbar {
+  min-height: 84px;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #323839;
+  background: #171b1c;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: #92a0a1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.safety-lock {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #7de5a4;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.safety-lock svg {
+  width: 19px;
+  height: 19px;
+}
+
+.phase-band {
+  min-height: 154px;
+  padding: 22px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  border-bottom: 1px solid #323839;
+  background: #e4e9e7;
+  color: #111516;
+}
+
+.phase-band.is-failed {
+  background: #ffd8d3;
+  color: #4d1611;
+}
+
+.phase-band.is-failed .phase-copy > p,
+.phase-band.is-failed .phase-time span {
+  color: #75322b;
+}
+
+.phase-copy {
+  min-width: 0;
+}
+
+.phase-copy > p:first-child {
+  margin-bottom: 6px;
+  color: #4d5a5b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.phase-copy h2 {
+  margin-bottom: 8px;
+  font-size: 38px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.phase-copy > p:last-child {
+  max-width: 760px;
+  margin-bottom: 0;
+  color: #3b4546;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.phase-time {
+  width: 160px;
+  flex: 0 0 160px;
+  padding-left: 22px;
+  border-left: 1px solid #aeb8b7;
+}
+
+.phase-time strong {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-size: 42px;
+  line-height: 1;
+}
+
+.phase-time span {
+  display: block;
+  margin-top: 8px;
+  color: #596566;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.timeline {
+  padding: 13px 24px 10px;
+  border-bottom: 1px solid #323839;
+  background: #171b1c;
+}
+
+.timeline-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  background: #343b3c;
+}
+
+.timeline-fill {
+  width: 0;
+  height: 100%;
+  background: #37c8d6;
+  transition: width 180ms linear;
+}
+
+.timeline-mark {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: #101314;
+}
+
+.timeline-labels {
+  display: grid;
+  margin-top: 7px;
+  color: #8d999a;
+  font-size: 9px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.timeline-labels span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 326px;
+}
+
+.plot-panel {
+  min-width: 0;
+  min-height: 480px;
+  display: grid;
+  grid-template-rows: auto minmax(360px, 1fr) auto;
+  border-right: 1px solid #323839;
+  background: #111516;
+}
+
+.plot-heading,
+.plot-footer {
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.plot-heading {
+  border-bottom: 1px solid #2b3031;
+}
+
+.plot-heading h2 {
+  margin-bottom: 0;
+  font-size: 18px;
+}
+
+.plot-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #9ba5a6;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.plot-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  display: inline-block;
+  border-radius: 50%;
+}
+
+.start-dot {
+  background: #6ce19a;
+}
+
+.path-dot {
+  background: #37c8d6;
+}
+
+.current-dot {
+  background: #ffbf4b;
+}
+
+#pathCanvas {
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  display: block;
+}
+
+.plot-footer {
+  border-top: 1px solid #2b3031;
+  color: #8e9999;
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-panel {
+  min-width: 0;
+  background: #171b1c;
+}
+
+.status-panel > section {
+  padding: 18px 20px;
+  border-bottom: 1px solid #323839;
+}
+
+.mission-clock strong {
+  display: block;
+  font-size: 44px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-clock > span {
+  display: block;
+  margin-top: 10px;
+  overflow: hidden;
+  color: #899596;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.metrics-strip span {
+  display: block;
+  color: #8d999a;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.metrics-strip strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sensor-list {
+  display: grid;
+  gap: 4px;
+}
+
+.sensor-row {
+  height: 57px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 10px;
+  align-items: center;
+  gap: 11px;
+  border-bottom: 1px solid #292f30;
+}
+
+.sensor-row:last-child {
+  border-bottom: 0;
+}
+
+.sensor-row > svg {
+  width: 18px;
+  height: 18px;
+  color: #8f9b9c;
+}
+
+.sensor-row strong,
+.sensor-row span {
+  display: block;
+}
+
+.sensor-row strong {
+  font-size: 11px;
+}
+
+.sensor-row span {
+  margin-top: 3px;
+  color: #8f9a9b;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.health-light {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #697475;
+}
+
+.sensor-row.is-healthy .health-light {
+  background: #6ce19a;
+  box-shadow: 0 0 0 3px rgb(108 225 154 / 13%);
+}
+
+.sensor-row.is-warning .health-light {
+  background: #ffbf4b;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 10px;
+}
+
+.command-button,
+.icon-button {
+  height: 44px;
+  border: 1px solid #4b5657;
+  color: #edf2f1;
+  background: #252b2c;
+  cursor: pointer;
+}
+
+.command-button {
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.command-button svg,
+.icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  color: #ff8b7d;
+}
+
+.command-button:hover,
+.icon-button:hover {
+  border-color: #7c898a;
+  background: #303738;
+}
+
+.command-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.connection-status {
+  min-height: 34px;
+  margin: 0;
+  padding: 11px 20px;
+  color: #ffbf4b;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.connection-status.is-live {
+  color: #6ce19a;
+}
+
+@media (max-width: 840px) {
+  .topbar,
+  .phase-band {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .phase-copy h2 {
+    font-size: 30px;
+  }
+
+  .phase-time {
+    width: 120px;
+    flex-basis: 120px;
+  }
+
+  .phase-time strong {
+    font-size: 34px;
+  }
+
+  .timeline {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .plot-panel {
+    min-height: 460px;
+    border-right: 0;
+    border-bottom: 1px solid #323839;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    min-height: 72px;
+  }
+
+  h1 {
+    font-size: 17px;
+  }
+
+  .safety-lock span {
+    display: none;
+  }
+
+  .phase-band {
+    min-height: 180px;
+    align-items: flex-start;
+  }
+
+  .phase-copy h2 {
+    font-size: 26px;
+  }
+
+  .phase-copy > p:last-child {
+    font-size: 14px;
+  }
+
+  .phase-time {
+    width: 86px;
+    flex-basis: 86px;
+    padding-left: 12px;
+  }
+
+  .phase-time strong {
+    font-size: 28px;
+  }
+
+  .timeline-labels {
+    font-size: 7px;
+  }
+
+  .plot-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plot-panel {
+    grid-template-rows: auto 360px auto;
+  }
+
+  .plot-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

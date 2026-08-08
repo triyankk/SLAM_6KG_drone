@@ -14,6 +14,7 @@ from typing import Any, Iterable
 import numpy as np
 
 from .flight_logger import SCHEMA_VERSION, _json_safe
+from .slam_timing import analyze_slam_timing
 
 
 SELECTED_DATAFLASH_TYPES = frozenset(
@@ -537,6 +538,11 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     capture = report["capture_3d"]
     imu = report["imu_crosscheck"]
     raw_events = report["raw_sensor_events"]
+    slam_timing = report["slam_timing"]
+    slam_gates = slam_timing["gates"]
+    slam_imu = slam_timing["external_imu"]
+    slam_lidar = slam_timing["jt16"]
+    slam_camera = slam_timing["d415"]
     lines = [
         "# Flight Analysis",
         "",
@@ -599,6 +605,30 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     lines.extend(
         (
             "",
+            "## SLAM Timing Gate",
+            "",
+            (
+                "- Lidar-inertial replay ready: "
+                f"{str(bool(slam_gates.get('ready_for_lidar_inertial_replay'))).lower()}"
+            ),
+            (
+                "- IM10A measured rate: "
+                f"{_format_value(_get(slam_imu, 'host_arrival.observed_rate_hz'), ' Hz')}"
+            ),
+            (
+                "- IM10A hardware time present: "
+                f"{str(bool(slam_imu.get('hardware_timestamp_present'))).lower()}"
+            ),
+            f"- D415 timed framesets: {slam_camera.get('framesets', 0)}",
+            f"- JT16 timed frames: {slam_lidar.get('frames', 0)}",
+            (
+                "- Remaining blockers: "
+                f"{'; '.join(slam_timing.get('blockers', [])) or 'none'}"
+            ),
+            "",
+            "The timing gate is evidence for recorded estimator work, not a "
+            "flight-control authorization.",
+            "",
             "## Power And Vibration",
             "",
             (
@@ -631,12 +661,12 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
                 f"{capture.get('pointcloud_frames', 0)}"
             ),
             (
-                "- JT16 packets: "
-                f"{capture.get('lidar_packets', 0)}"
+                "- JT16 packet headers: "
+                f"{capture.get('lidar_packet_headers', 0)}"
             ),
             (
-                "- JT16 PCAP size: "
-                f"{_format_value(capture.get('lidar_pcap_bytes'), ' bytes', 0)}"
+                "- JT16 raw capture size: "
+                f"{_format_value(capture.get('lidar_capture_bytes'), ' bytes', 0)}"
             ),
             (
                 "- RealSense bag size: "
@@ -691,6 +721,7 @@ def analyze_session(
     raw_sensor_events = _summarize_sensor_events(
         session / "sensor_events.ndjson"
     )
+    slam_timing = analyze_slam_timing(session, manifest)
 
     dataflash_summary: dict[str, Any] | None = None
     if cube_log is not None:
@@ -774,7 +805,13 @@ def analyze_session(
         for axis in range(3)
     ]
     environment_path = session / "pointcloud" / "flight_environment.ply"
-    lidar_path = session / "lidar" / "jt16_packets.pcap"
+    lidar_serial_path = session / "lidar" / "jt16_serial.bin"
+    lidar_pcap_path = session / "lidar" / "jt16_packets.pcap"
+    lidar_path = (
+        lidar_serial_path
+        if lidar_serial_path.exists()
+        else lidar_pcap_path
+    )
     bag_path = session / "realsense" / "flight.bag"
     bag_bytes = bag_path.stat().st_size if bag_path.exists() else 0
 
@@ -790,6 +827,9 @@ def analyze_session(
             "telemetry_rows": len(telemetry),
             "sensor_event_rows": int(
                 _get(manifest, "rows.sensor_events", 0) or 0
+            ),
+            "sensor_timing_rows": int(
+                _get(manifest, "rows.sensor_timing", 0) or 0
             ),
             "shadow_rows": len(shadows),
             "armed_samples": sum(armed),
@@ -830,6 +870,7 @@ def analyze_session(
             ),
         },
         "raw_sensor_events": raw_sensor_events,
+        "slam_timing": slam_timing,
         "imu_crosscheck": _estimate_imu_alignment(telemetry),
         "power": {
             "voltage_v": _stats(
@@ -870,10 +911,20 @@ def analyze_session(
             "pointcloud_frames": len(
                 tuple((session / "pointcloud" / "frames").glob("*.ply"))
             ),
-            "lidar_packets": int(
-                _get(manifest, "source_stats.lidar.packets", 0) or 0
+            "lidar_transport": (
+                "serial_rs485"
+                if lidar_serial_path.exists()
+                else "legacy_udp"
             ),
-            "lidar_pcap_bytes": (
+            "lidar_packet_headers": int(
+                _get(
+                    manifest,
+                    "source_stats.lidar.header_candidates",
+                    _get(manifest, "source_stats.lidar.packets", 0),
+                )
+                or 0
+            ),
+            "lidar_capture_bytes": (
                 lidar_path.stat().st_size if lidar_path.exists() else 0
             ),
             "realsense_bag_bytes": bag_bytes,

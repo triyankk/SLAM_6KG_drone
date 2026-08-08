@@ -12,20 +12,27 @@ import math
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import socket
 import struct
+import subprocess
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import numpy as np
 
 from .config import ConfigError, ProjectConfig, load_config
-from .paths import CONFIG_DIR, RECORDING_DIR
+from .obstacles import (
+    DepthObstacleExtractor,
+    LidarObstacleExtractor,
+    ObstacleScan,
+)
+from .paths import CONFIG_DIR, PROJECT_ROOT, RECORDING_DIR
 from .pointcloud import (
     MapPose,
     VoxelMap,
@@ -42,6 +49,9 @@ POSITION_TARGET_X_IGNORE = 1 << 0
 POSITION_TARGET_Y_IGNORE = 1 << 1
 POSITION_TARGET_VX_IGNORE = 1 << 3
 POSITION_TARGET_VY_IGNORE = 1 << 4
+TIMING_MAVLINK_TYPES = frozenset(
+    ("ATTITUDE", "HIGHRES_IMU", "SCALED_IMU", "SYSTEM_TIME")
+)
 
 
 def _utc_now() -> str:
@@ -465,8 +475,13 @@ class FlightSession:
         self.sensor_events = NdjsonWriter(
             session_dir / "sensor_events.ndjson"
         )
+        self.sensor_timing = NdjsonWriter(
+            session_dir / "sensor_timing.ndjson"
+        )
         self.shadow = NdjsonWriter(session_dir / "shadow_predictions.ndjson")
-        self.events = NdjsonWriter(session_dir / "events.ndjson")
+        self.events = NdjsonWriter(
+            session_dir / "events.ndjson", flush_interval_s=0.0
+        )
         self._lock = threading.Lock()
         self._closed = False
         self._latest_pose: MapPose | None = None
@@ -529,10 +544,11 @@ class FlightSession:
             "files": {
                 "telemetry": "telemetry.ndjson",
                 "sensor_events": "sensor_events.ndjson",
+                "sensor_timing": "sensor_timing.ndjson",
                 "shadow_predictions": "shadow_predictions.ndjson",
                 "events": "events.ndjson",
                 "environment_cloud": "pointcloud/flight_environment.ply",
-                "lidar_packets": "lidar/jt16_packets.pcap",
+                "lidar_packets": "lidar/jt16_serial.bin",
             },
             "source_stats": self._source_stats,
         }
@@ -588,6 +604,48 @@ class FlightSession:
 
     def record_sensor_event(self, event: dict[str, Any]) -> None:
         self.sensor_events.write(event)
+        source = str(event.get("source", ""))
+        sample_type = str(event.get("type", ""))
+        if source == "external_imu" or (
+            source == "cube_mavlink"
+            and sample_type in TIMING_MAVLINK_TYPES
+        ):
+            data = event.get("data", {})
+            if not isinstance(data, dict):
+                data = {}
+            self.record_sensor_timing(
+                {
+                    "source": source,
+                    "sample_type": sample_type,
+                    "host_monotonic_ns": event.get("host_monotonic_ns"),
+                    "host_unix_ns": event.get("host_unix_ns"),
+                    "source_sequence": event.get("sequence"),
+                    "sensor_time_boot_ms": data.get("time_boot_ms"),
+                    "sensor_time_usec": data.get("time_usec"),
+                    "sensor_time_s": data.get("sensor_time_s"),
+                    "sensor_timestamp_available": (
+                        (
+                            source == "external_imu"
+                            and data.get("sensor_time_s") is not None
+                        )
+                        or (
+                            source == "cube_mavlink"
+                            and (
+                                data.get("time_boot_ms") is not None
+                                or data.get("time_usec") is not None
+                            )
+                        )
+                    ),
+                }
+            )
+
+    def record_sensor_timing(self, row: dict[str, Any]) -> None:
+        self.sensor_timing.write(
+            {
+                "schema_version": SCHEMA_VERSION,
+                **row,
+            }
+        )
 
     def latest_pose(self) -> MapPose | None:
         with self._lock:
@@ -618,6 +676,7 @@ class FlightSession:
         )
         self.telemetry.close()
         self.sensor_events.close()
+        self.sensor_timing.close()
         self.shadow.close()
         self.events.close()
         self._manifest.update(
@@ -627,6 +686,7 @@ class FlightSession:
             rows={
                 "telemetry": self.telemetry.rows,
                 "sensor_events": self.sensor_events.rows,
+                "sensor_timing": self.sensor_timing.rows,
                 "shadow_predictions": self.shadow.rows,
                 "events": self.events.rows,
             },
@@ -866,7 +926,7 @@ class RawIpPcapWriter:
 
 
 class LidarPacketRecorder(threading.Thread):
-    """Capture every JT16 UDP datagram without interpreting geometry."""
+    """Legacy reader retained only for replaying old Ethernet-era tests."""
 
     def __init__(
         self,
@@ -964,6 +1024,439 @@ class LidarPacketRecorder(threading.Thread):
             )
 
 
+class LidarSerialRecorder(threading.Thread):
+    """Capture the JT16 RS485 byte stream without decoding point geometry."""
+
+    def __init__(
+        self,
+        session: FlightSession,
+        stop_event: threading.Event,
+        *,
+        endpoint: str,
+        baud: int,
+    ) -> None:
+        super().__init__(name="jt16-serial-recorder", daemon=True)
+        self.session = session
+        self.stop_event = stop_event
+        self.endpoint = endpoint
+        self.baud = baud
+
+    def run(self) -> None:
+        byte_count = 0
+        header_candidates = 0
+        previous_tail = b""
+        output = None
+        connection = None
+        last_flush_s = time.monotonic()
+        try:
+            import serial
+
+            connection = serial.Serial(
+                self.endpoint,
+                baudrate=self.baud,
+                timeout=0.1,
+                exclusive=True,
+            )
+            output = (
+                self.session.lidar_dir / "jt16_serial.bin"
+            ).open("wb")
+            self.session.event(
+                "lidar",
+                "serial_capture_ready",
+                {"endpoint": self.endpoint, "baud": self.baud},
+            )
+            while not self.stop_event.is_set():
+                chunk = connection.read(65536)
+                if not chunk:
+                    continue
+                output.write(chunk)
+                byte_count += len(chunk)
+                framed = previous_tail + chunk
+                header_candidates += framed.count(b"\xee\xff")
+                previous_tail = framed[-1:]
+                now_s = time.monotonic()
+                if now_s - last_flush_s >= 1.0:
+                    output.flush()
+                    os.fsync(output.fileno())
+                    last_flush_s = now_s
+                    self.session.set_source_stats(
+                        "lidar",
+                        transport="serial_rs485",
+                        endpoint=self.endpoint,
+                        baud=self.baud,
+                        bytes=byte_count,
+                        header_candidates=header_candidates,
+                        framing_only=True,
+                    )
+        except (ImportError, OSError, ValueError) as exc:
+            self.session.event(
+                "lidar", "serial_capture_error", {"error": str(exc)}
+            )
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+            if output is not None:
+                output.flush()
+                os.fsync(output.fileno())
+                output.close()
+            self.session.set_source_stats(
+                "lidar",
+                transport="serial_rs485",
+                endpoint=self.endpoint,
+                baud=self.baud,
+                bytes=byte_count,
+                header_candidates=header_candidates,
+                framing_only=True,
+            )
+
+
+class HesaiLidarRecorder(threading.Thread):
+    """Decode JT16 frames with Hesai's SDK and preserve the serial packets."""
+
+    FRAME_HEADER = struct.Struct("<8sIIQQ")
+    FRAME_MAGIC = b"OFJT16P1"
+    FRAME_VERSION = 2
+    MAXIMUM_POINTS = 1_000_000
+    POINT_DTYPE = np.dtype(
+        [
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("z", "<f4"),
+            ("timestamp", "<f8"),
+            ("ring", "<u2"),
+            ("intensity", "u1"),
+            ("confidence", "u1"),
+        ],
+        align=False,
+    )
+
+    def __init__(
+        self,
+        session: FlightSession,
+        stop_event: threading.Event,
+        config: ProjectConfig,
+        *,
+        obstacle_sink: Callable[[ObstacleScan], None] | None = None,
+    ) -> None:
+        super().__init__(name="hesai-jt16-recorder", daemon=True)
+        self.session = session
+        self.stop_event = stop_event
+        self.lidar = config.lidar
+        self.obstacle_sink = obstacle_sink
+        self.extractor = (
+            LidarObstacleExtractor(config.obstacle_avoidance, self.lidar)
+            if (
+                obstacle_sink is not None
+                and config.obstacle_avoidance.lidar_enabled
+            )
+            else None
+        )
+
+    @staticmethod
+    def _project_path(value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+    def _read_exact(
+        self,
+        process: subprocess.Popen,
+        size: int,
+    ) -> bytes | None:
+        output = process.stdout
+        if output is None:
+            return None
+        descriptor = output.fileno()
+        collected = bytearray()
+        while len(collected) < size:
+            if self.stop_event.is_set():
+                return None
+            if process.poll() is not None:
+                return None
+            ready, _, _ = select.select((descriptor,), (), (), 0.2)
+            if not ready:
+                continue
+            chunk = os.read(descriptor, size - len(collected))
+            if not chunk:
+                return None
+            collected.extend(chunk)
+        return bytes(collected)
+
+    def run(self) -> None:
+        bridge = self._project_path(self.lidar.bridge_binary)
+        correction = self._project_path(self.lidar.correction_file)
+        raw_path = self.session.lidar_dir / "jt16_serial.bin"
+        stderr_path = self.session.lidar_dir / "jt16_bridge.log"
+        process: subprocess.Popen | None = None
+        stderr_output = None
+        frame_count = 0
+        point_count = 0
+        extraction_errors = 0
+        first_frame_monotonic_ns: int | None = None
+        last_frame_monotonic_ns: int | None = None
+        bridge_forced_stop = False
+        started_s = time.monotonic()
+        try:
+            if not bridge.is_file() or not os.access(bridge, os.X_OK):
+                raise OSError(
+                    f"JT16 bridge is missing; run ./optflow build-jt16: "
+                    f"{bridge}"
+                )
+            if not correction.is_file():
+                raise OSError(
+                    f"JT16 correction file is missing: {correction}"
+                )
+            if not Path(self.lidar.symlink).exists():
+                raise OSError(
+                    f"JT16 serial device is missing: {self.lidar.symlink}"
+                )
+            stderr_output = stderr_path.open("wb")
+            command = [
+                str(bridge),
+                "--device",
+                self.lidar.symlink,
+                "--baud",
+                str(self.lidar.baud),
+                "--correction",
+                str(correction),
+                "--raw-output",
+                str(raw_path),
+                "--startup-timeout",
+                "5",
+            ]
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=stderr_output,
+                bufsize=0,
+            )
+            self.session.event(
+                "lidar",
+                "sdk_bridge_started",
+                {
+                    "endpoint": self.lidar.symlink,
+                    "baud": self.lidar.baud,
+                    "sdk_revision": self.lidar.sdk_revision,
+                    "correction_file": str(correction),
+                    "correction_verified": (
+                        self.lidar.correction_verified
+                    ),
+                },
+            )
+
+            while not self.stop_event.is_set():
+                header_bytes = self._read_exact(
+                    process, self.FRAME_HEADER.size
+                )
+                if header_bytes is None:
+                    break
+                (
+                    magic,
+                    version,
+                    points_in_frame,
+                    frame_monotonic_ns,
+                    frame_index,
+                ) = self.FRAME_HEADER.unpack(header_bytes)
+                if magic != self.FRAME_MAGIC or version != self.FRAME_VERSION:
+                    raise ValueError("JT16 bridge frame header is invalid")
+                if (
+                    points_in_frame <= 0
+                    or points_in_frame > self.MAXIMUM_POINTS
+                ):
+                    raise ValueError(
+                        "JT16 bridge point count is outside limits"
+                    )
+                payload = self._read_exact(
+                    process, points_in_frame * self.POINT_DTYPE.itemsize
+                )
+                if payload is None:
+                    break
+                host_receive_monotonic_ns = time.monotonic_ns()
+                host_receive_unix_ns = time.time_ns()
+                records = np.frombuffer(payload, dtype=self.POINT_DTYPE)
+                points = np.column_stack(
+                    (records["x"], records["y"], records["z"])
+                )
+                point_timestamps = records["timestamp"]
+                finite_point_timestamps = point_timestamps[
+                    np.isfinite(point_timestamps)
+                ]
+                point_timestamp_min_s = (
+                    float(finite_point_timestamps.min())
+                    if len(finite_point_timestamps)
+                    else None
+                )
+                point_timestamp_max_s = (
+                    float(finite_point_timestamps.max())
+                    if len(finite_point_timestamps)
+                    else None
+                )
+                point_timestamp_span_s = (
+                    point_timestamp_max_s - point_timestamp_min_s
+                    if point_timestamp_min_s is not None
+                    and point_timestamp_max_s is not None
+                    else None
+                )
+                self.session.record_sensor_timing(
+                    {
+                        "source": "jt16_frame",
+                        "host_receive_monotonic_ns": (
+                            host_receive_monotonic_ns
+                        ),
+                        "host_receive_unix_ns": host_receive_unix_ns,
+                        "bridge_callback_monotonic_ns": (
+                            frame_monotonic_ns
+                        ),
+                        "frame_index": frame_index,
+                        "point_count": points_in_frame,
+                        "point_timestamp_min_s": point_timestamp_min_s,
+                        "point_timestamp_max_s": point_timestamp_max_s,
+                        "point_timestamp_span_s": point_timestamp_span_s,
+                        "ring_min": (
+                            int(records["ring"].min())
+                            if len(records)
+                            else None
+                        ),
+                        "ring_max": (
+                            int(records["ring"].max())
+                            if len(records)
+                            else None
+                        ),
+                    }
+                )
+                if first_frame_monotonic_ns is None:
+                    first_frame_monotonic_ns = host_receive_monotonic_ns
+                last_frame_monotonic_ns = host_receive_monotonic_ns
+                frame_count += 1
+                point_count += points_in_frame
+                if self.extractor is not None and self.obstacle_sink is not None:
+                    try:
+                        self.obstacle_sink(
+                            self.extractor.extract(
+                                points,
+                                monotonic_ns=frame_monotonic_ns,
+                            )
+                        )
+                    except (TypeError, ValueError) as exc:
+                        extraction_errors += 1
+                        if extraction_errors == 1:
+                            self.session.event(
+                                "obstacles",
+                                "lidar_extraction_error",
+                                {"error": str(exc)},
+                            )
+
+                elapsed_s = max(0.001, time.monotonic() - started_s)
+                self.session.set_source_stats(
+                    "lidar",
+                    transport="serial_rs485_hesai_sdk",
+                    endpoint=self.lidar.symlink,
+                    baud=self.lidar.baud,
+                    sdk_revision=self.lidar.sdk_revision,
+                    frames=frame_count,
+                    frame_rate_hz=round(frame_count / elapsed_s, 3),
+                    points=point_count,
+                    latest_points=points_in_frame,
+                    ring_min=(
+                        int(records["ring"].min())
+                        if len(records)
+                        else None
+                    ),
+                    ring_max=(
+                        int(records["ring"].max())
+                        if len(records)
+                        else None
+                    ),
+                    point_timestamp_span_s=(
+                        point_timestamp_span_s
+                    ),
+                    extraction_errors=extraction_errors,
+                    raw_bytes=(
+                        raw_path.stat().st_size
+                        if raw_path.exists()
+                        else 0
+                    ),
+                )
+
+            if (
+                process.poll() is not None
+                and not self.stop_event.is_set()
+            ):
+                raise RuntimeError(
+                    f"JT16 bridge exited with code {process.returncode}"
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.session.event(
+                "lidar", "sdk_bridge_error", {"error": str(exc)}
+            )
+        finally:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    bridge_forced_stop = True
+                    process.kill()
+                    process.wait(timeout=2.0)
+                    self.session.event(
+                        "lidar",
+                        "sdk_bridge_forced_stop",
+                        {
+                            "scope": "capture_finalization_only",
+                            "capture_frames_preserved": frame_count,
+                        },
+                    )
+            if process is not None and process.stdout is not None:
+                process.stdout.close()
+            if stderr_output is not None:
+                stderr_output.flush()
+                os.fsync(stderr_output.fileno())
+                stderr_output.close()
+            elapsed_s = max(0.001, time.monotonic() - started_s)
+            active_duration_s = (
+                (
+                    last_frame_monotonic_ns - first_frame_monotonic_ns
+                )
+                / 1.0e9
+                if first_frame_monotonic_ns is not None
+                and last_frame_monotonic_ns is not None
+                and last_frame_monotonic_ns > first_frame_monotonic_ns
+                else None
+            )
+            active_frame_rate_hz = (
+                (frame_count - 1) / active_duration_s
+                if active_duration_s is not None and frame_count >= 2
+                else frame_count / elapsed_s
+            )
+            self.session.set_source_stats(
+                "lidar",
+                transport="serial_rs485_hesai_sdk",
+                endpoint=self.lidar.symlink,
+                baud=self.lidar.baud,
+                sdk_revision=self.lidar.sdk_revision,
+                frames=frame_count,
+                frame_rate_hz=round(active_frame_rate_hz, 3),
+                active_duration_s=active_duration_s,
+                points=point_count,
+                extraction_errors=extraction_errors,
+                raw_bytes=(
+                    raw_path.stat().st_size if raw_path.exists() else 0
+                ),
+                bridge_exit_code=(
+                    None if process is None else process.returncode
+                ),
+                bridge_forced_stop=bridge_forced_stop,
+                bridge_forced_stop_scope=(
+                    "capture_finalization_only"
+                    if bridge_forced_stop
+                    else None
+                ),
+            )
+
+
 class RealSensePointCloudRecorder(threading.Thread):
     """Record a RealSense bag and build a sampled local-frame PLY map."""
 
@@ -977,15 +1470,56 @@ class RealSensePointCloudRecorder(threading.Thread):
         point_stride: int,
         voxel_size_m: float,
         record_bag: bool,
+        obstacle_sink: Callable[[ObstacleScan], None] | None = None,
     ) -> None:
         super().__init__(name="realsense-flight-recorder", daemon=True)
         self.session = session
         self.stop_event = stop_event
         self.camera = config.depth_camera
+        self.camera_intrinsics_verified = (
+            config.calibration.camera_intrinsics_verified
+        )
         self.period_s = 1.0 / pointcloud_rate_hz
         self.point_stride = point_stride
         self.voxel_map = VoxelMap(voxel_size_m=voxel_size_m)
         self.record_bag = record_bag
+        self.obstacle_sink = obstacle_sink
+        self.obstacle_extractor = (
+            DepthObstacleExtractor(config.obstacle_avoidance, self.camera)
+            if (
+                obstacle_sink is not None
+                and config.obstacle_avoidance.depth_camera_enabled
+            )
+            else None
+        )
+        self.obstacle_period_s = (
+            1.0 / config.obstacle_avoidance.target_rate_hz
+        )
+
+    @staticmethod
+    def _frame_timing(frame: Any, prefix: str) -> dict[str, Any]:
+        if not frame:
+            return {
+                f"{prefix}_frame_number": None,
+                f"{prefix}_sensor_timestamp_ms": None,
+                f"{prefix}_timestamp_domain": None,
+            }
+        try:
+            return {
+                f"{prefix}_frame_number": int(frame.get_frame_number()),
+                f"{prefix}_sensor_timestamp_ms": float(
+                    frame.get_timestamp()
+                ),
+                f"{prefix}_timestamp_domain": str(
+                    frame.get_frame_timestamp_domain()
+                ),
+            }
+        except RuntimeError:
+            return {
+                f"{prefix}_frame_number": None,
+                f"{prefix}_sensor_timestamp_ms": None,
+                f"{prefix}_timestamp_domain": None,
+            }
 
     def run(self) -> None:
         try:
@@ -1002,7 +1536,10 @@ class RealSensePointCloudRecorder(threading.Thread):
         frame_count = 0
         frame_timeouts = 0
         mapped_frames = 0
+        obstacle_frames = 0
+        last_obstacle_nearest_m: float | None = None
         last_map_time = -math.inf
+        last_obstacle_time = -math.inf
         last_flush_time = time.monotonic()
         try:
             pipeline = rs.pipeline()
@@ -1068,20 +1605,31 @@ class RealSensePointCloudRecorder(threading.Thread):
                     )
                     continue
                 frame_count += 1
-                now = time.monotonic()
-                if now - last_map_time < self.period_s:
-                    continue
+                host_monotonic_ns = time.monotonic_ns()
+                host_unix_ns = time.time_ns()
+                now = host_monotonic_ns / 1.0e9
+                original_depth_frame = frames.get_depth_frame()
+                original_color_frame = frames.get_color_frame()
+                self.session.record_sensor_timing(
+                    {
+                        "source": "realsense_frameset",
+                        "host_monotonic_ns": host_monotonic_ns,
+                        "host_unix_ns": host_unix_ns,
+                        **self._frame_timing(
+                            original_depth_frame, "depth"
+                        ),
+                        **self._frame_timing(
+                            original_color_frame, "color"
+                        ),
+                    }
+                )
                 aligned = align.process(frames)
                 depth_frame = aligned.get_depth_frame()
                 color_frame = aligned.get_color_frame()
                 if not depth_frame or not color_frame:
                     continue
-                pose = self.session.latest_pose()
-                if pose is None:
-                    continue
 
                 depth = np.asanyarray(depth_frame.get_data())
-                color = np.asanyarray(color_frame.get_data())
                 intrinsics = (
                     depth_frame.profile.as_video_stream_profile().intrinsics
                 )
@@ -1097,8 +1645,16 @@ class RealSensePointCloudRecorder(threading.Thread):
                         "model": str(intrinsics.model),
                         "coefficients": list(intrinsics.coeffs),
                         "depth_scale_m": depth_scale_m,
-                        "verified": False,
-                        "note": "captured device values; calibration gate remains open",
+                        "verified": self.camera_intrinsics_verified,
+                        "note": (
+                            "captured device values; verified by the "
+                            "project calibration gate"
+                            if self.camera_intrinsics_verified
+                            else (
+                                "captured device values; calibration gate "
+                                "remains open"
+                            )
+                        ),
                     }
                     (
                         self.session.realsense_dir / "intrinsics.json"
@@ -1108,6 +1664,39 @@ class RealSensePointCloudRecorder(threading.Thread):
                     )
                     intrinsics_written = True
 
+                if (
+                    self.obstacle_extractor is not None
+                    and self.obstacle_sink is not None
+                    and now - last_obstacle_time
+                    >= self.obstacle_period_s
+                ):
+                    last_obstacle_time = now
+                    try:
+                        scan = self.obstacle_extractor.extract(
+                            depth,
+                            depth_scale_m=depth_scale_m,
+                            fx=intrinsics.fx,
+                            fy=intrinsics.fy,
+                            ppx=intrinsics.ppx,
+                            ppy=intrinsics.ppy,
+                            monotonic_ns=time.monotonic_ns(),
+                        )
+                        self.obstacle_sink(scan)
+                        obstacle_frames += 1
+                        last_obstacle_nearest_m = scan.nearest_distance_m
+                    except (TypeError, ValueError) as exc:
+                        self.session.event(
+                            "obstacles",
+                            "depth_extraction_error",
+                            {"error": str(exc)},
+                        )
+
+                if now - last_map_time < self.period_s:
+                    continue
+                pose = self.session.latest_pose()
+                if pose is None:
+                    continue
+                color = np.asanyarray(color_frame.get_data())
                 rows = np.arange(
                     0, depth.shape[0], self.point_stride, dtype=np.int32
                 )
@@ -1160,6 +1749,8 @@ class RealSensePointCloudRecorder(threading.Thread):
                     frame_timeouts=frame_timeouts,
                     pointcloud_frames=mapped_frames,
                     map_voxels=len(self.voxel_map),
+                    obstacle_frames=obstacle_frames,
+                    obstacle_nearest_m=last_obstacle_nearest_m,
                     rejected_new_voxels=(
                         self.voxel_map.rejected_new_voxels
                     ),
@@ -1189,6 +1780,8 @@ class RealSensePointCloudRecorder(threading.Thread):
                 frame_timeouts=frame_timeouts,
                 pointcloud_frames=mapped_frames,
                 map_voxels=len(self.voxel_map),
+                obstacle_frames=obstacle_frames,
+                obstacle_nearest_m=last_obstacle_nearest_m,
                 rejected_new_voxels=self.voxel_map.rejected_new_voxels,
             )
 
@@ -1268,7 +1861,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-lidar",
         action="store_true",
-        help="Disable JT16 UDP PCAP capture",
+        help="Disable JT16 SDK decoding and raw serial capture",
     )
     parser.add_argument(
         "--duration",
@@ -1366,12 +1959,10 @@ def main() -> int:
         )
     if not args.no_lidar:
         sources.append(
-            LidarPacketRecorder(
+            HesaiLidarRecorder(
                 session,
                 stop_event,
-                port=config.lidar.udp_port,
-                configured_lidar_ip=config.lidar.lidar_ip,
-                destination_ip=config.lidar.jetson_ip,
+                config,
             )
         )
 

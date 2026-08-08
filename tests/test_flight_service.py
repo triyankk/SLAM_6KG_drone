@@ -1,10 +1,14 @@
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from optflow_slam.config import load_config
 from optflow_slam.flight_service import (
     ArmTriggeredRecorder,
     ServiceSettings,
+    latest_service_session,
+    recover_stale_service_sessions,
 )
 from optflow_slam.paths import CONFIG_DIR
 
@@ -210,3 +214,92 @@ def test_low_disk_during_recording_finalizes_once(tmp_path: Path) -> None:
     manifest = json.loads((session_path / "manifest.json").read_text())
     assert manifest["status"] == "interrupted"
     assert manifest["stop_reason"] == "minimum_free_space_reached"
+
+
+def test_startup_recovers_stale_service_manifest(tmp_path: Path) -> None:
+    session_path = tmp_path / "20260730T000000Z_armed"
+    session_path.mkdir()
+    manifest_path = session_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "status": "recording",
+                "ended_utc": None,
+                "telemetry_url": "direct://cube-uart",
+            }
+        ),
+        encoding="utf-8",
+    )
+    telemetry_path = session_path / "telemetry.ndjson"
+    telemetry_path.write_text(
+        '{"sample":1}\n', encoding="utf-8"
+    )
+    expected_end = datetime.fromtimestamp(
+        telemetry_path.stat().st_mtime, timezone.utc
+    ).isoformat(timespec="milliseconds")
+    analysis_path = session_path / "analysis"
+    analysis_path.mkdir()
+    later_report = analysis_path / "report.json"
+    later_report.write_text("{}", encoding="utf-8")
+    os.utime(later_report, (2_000_000_000, 2_000_000_000))
+
+    recovered = recover_stale_service_sessions(tmp_path)
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert recovered == [session_path]
+    assert manifest["status"] == "interrupted"
+    assert manifest["stop_reason"] == "recovered_after_unclean_shutdown"
+    assert manifest["ended_utc"] == expected_end
+    assert manifest["recovery"]["files_preserved"]
+
+
+def test_startup_leaves_manual_recording_manifest_alone(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "manual"
+    session_path.mkdir()
+    manifest_path = session_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "status": "recording",
+                "telemetry_url": "http://127.0.0.1:8765/api/stream",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert recover_stale_service_sessions(tmp_path) == []
+    assert json.loads(manifest_path.read_text())["status"] == "recording"
+
+
+def test_latest_service_session_ignores_manual_session(
+    tmp_path: Path,
+) -> None:
+    service_path = tmp_path / "service"
+    manual_path = tmp_path / "manual"
+    service_path.mkdir()
+    manual_path.mkdir()
+    (service_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "started_utc": "2026-07-30T01:00:00+00:00",
+                "telemetry_url": "direct://cube-uart",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (manual_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "started_utc": "2026-07-30T02:00:00+00:00",
+                "telemetry_url": "http://127.0.0.1:8765/api/stream",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    latest = latest_service_session(tmp_path)
+
+    assert latest is not None
+    assert latest[0] == service_path
