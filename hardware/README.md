@@ -29,16 +29,26 @@ sudo ./optflow install-realsense-rules
 The rule is narrowed to the D415 USB product ID used by this aircraft. It is
 based on the upstream librealsense device rule for the same SDK release.
 
-Configure the dedicated JT16 Ethernet interface once:
+The JT16 point-cloud path is serial RS485 through the Prolific `067b:23a3`
+adapter. Build and install its driver once:
 
 ```bash
-./optflow lidar-network
+./optflow build-pl2303
+sudo ./optflow install-pl2303
 ```
 
-This saves `192.168.1.100/24` on `enP8p1s0`, disables a default route, and adds
-an explicit `192.168.1.201/32` host route. The host route prevents the Jetson's
-Wi-Fi, which may also use `192.168.1.0/24`, from taking lidar traffic. The
-profile activates automatically once Ethernet carrier is present.
+The udev rule binds adapter serial `DCCEb114J19` to `/dev/jt16_usb`. The JT16
+manual specifies 3,000,000 baud for current firmware and 3,125,000 baud for
+firmware `00.B0.1`; this unit must be probed before either value is marked
+verified. Build the pinned official Hesai decoder and inspect the serial path:
+
+```bash
+./optflow build-jt16
+./optflow lidar-status
+```
+
+The legacy `lidar-network` command is only an alias for `lidar-status`; it no
+longer creates or modifies a NetworkManager profile.
 
 With the aircraft disarmed, verify all three Jetson sensors:
 
@@ -47,8 +57,8 @@ With the aircraft disarmed, verify all three Jetson sensors:
 ```
 
 `READY=true` requires a live IM10A stream, a sustained synchronized RGB-depth
-stream, and JT16 UDP packets from the configured lidar address. USB
-enumeration, Ethernet carrier, or one camera frame alone is not a pass.
+stream, and valid JT16 serial packets. USB enumeration or one camera frame
+alone is not a pass.
 
 The Jetson headless display and VNC configuration is also kept here. Follow
 [`docs/HEADLESS_ACCESS.md`](../docs/HEADLESS_ACCESS.md) before enclosing the
@@ -63,12 +73,16 @@ sudo ./optflow install-headless-vnc
 The installer captures the current system configuration before replacing it.
 It does not restart the display manager or reboot the Jetson.
 
-The automatic flight logger is a per-user service. Install it once with:
+The JT16 obstacle-avoidance-only runtime is a per-user service. Install it once
+with:
 
 ```bash
 ./optflow install-flight-service
 ```
 
-The installer enables user lingering so the logger starts at boot without an
-interactive login. The service definition remains project-owned at
+The installer enables user lingering so the runtime starts at boot without an
+interactive login. It owns only the Cube MAVLink endpoint and JT16, publishes
+paced proximity faces, and observes RC7 for alerts. Camera, IM10A, SLAM, and
+companion movement output remain inactive. The service definition remains
+project-owned at
 `systemd/optflow-flight-logger.service`.

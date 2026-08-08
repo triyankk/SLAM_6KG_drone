@@ -1,5 +1,5 @@
 # ROS 2 Workspace
 
-All ROS 2 packages used by this project belong under this `src` directory.
-Build, install, and log outputs remain in the sibling workspace directories and
-must not reference another ROS workspace.
+Project-authored ROS 2 packages belong under this `src` directory. Generated,
+pinned third-party source and installs created by `./optflow build-lio` remain
+under `runtime/lio/`; neither path may reference another ROS workspace.

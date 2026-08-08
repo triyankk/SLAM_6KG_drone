@@ -15,11 +15,10 @@ dist/
 logs/
 recordings/
 maps/
-data/calibrations/*
+data/flight_logs/
 data/logs/*
 data/maps/*
 data/recordings/*
-!data/calibrations/.gitkeep
 !data/logs/.gitkeep
 !data/maps/.gitkeep
 !data/recordings/.gitkeep
@@ -32,3 +31,6 @@ visualizer/node_modules/
 visualizer/dist/
 visualizer/test-output/
 test-output/
+third_party/HesaiLidar_SDK_2.0/
+mav.tlog
+mav.tlog.raw
