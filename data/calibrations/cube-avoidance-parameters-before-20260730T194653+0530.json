@@ -1,0 +1,19 @@
+{
+  "active_avoidance_requested": false,
+  "captured_at": "2026-07-30T19:46:53.093326+05:30",
+  "config_path": "config/system.yaml",
+  "cube": {
+    "component_id": 1,
+    "system_id": 1
+  },
+  "current": {
+    "AVOID_ENABLE": 0.0,
+    "PRX1_TYPE": 2.0,
+    "RC7_OPTION": 0.0
+  },
+  "desired": {
+    "AVOID_ENABLE": 0.0,
+    "PRX1_TYPE": 0.0,
+    "RC7_OPTION": 40.0
+  }
+}

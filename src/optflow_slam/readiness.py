@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
+import os
 from pathlib import Path
-import socket
-import subprocess
 import time
 
 from .config import ProjectConfig
 from .models import ProbeResult, Profile, ReadinessReport
+from .paths import PROJECT_ROOT
 
 
 REQUIRED_BY_PROFILE = {
@@ -71,7 +70,7 @@ def probe_cube_hflow(config: ProjectConfig) -> ProbeResult:
         master = mavutil.mavlink_connection(
             fc.endpoint,
             baud=fc.baud,
-            source_system=fc.system_id,
+            source_system=fc.companion_system_id,
             source_component=fc.companion_component_id,
         )
         deadline = time.monotonic() + fc.heartbeat_timeout_s
@@ -369,151 +368,145 @@ def probe_external_imu(config: ProjectConfig) -> ProbeResult:
 
 def probe_lidar(config: ProjectConfig) -> ProbeResult:
     lidar = config.lidar
-    interface = Path("/sys/class/net") / lidar.ethernet_interface
-    if not interface.exists():
-        return ProbeResult(
-            "lidar",
-            False,
-            f"JT16 Ethernet interface is absent: {lidar.ethernet_interface}",
-        )
-    try:
-        carrier = (interface / "carrier").read_text(encoding="ascii").strip()
-    except OSError as exc:
-        return ProbeResult(
-            "lidar",
-            False,
-            f"Cannot read {lidar.ethernet_interface} carrier: {exc}",
-        )
-    if carrier != "1":
-        return ProbeResult(
-            "lidar",
-            False,
-            (
-                f"No Ethernet carrier on {lidar.ethernet_interface}; "
-                "connect and power the JT16"
-            ),
-        )
-
-    try:
-        address_result = subprocess.run(
-            [
-                "ip",
-                "-j",
-                "address",
-                "show",
-                "dev",
-                lidar.ethernet_interface,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        address_payload = json.loads(address_result.stdout)
-    except (
-        FileNotFoundError,
-        json.JSONDecodeError,
-        subprocess.CalledProcessError,
-    ) as exc:
-        return ProbeResult(
-            "lidar",
-            False,
-            f"Cannot inspect JT16 Ethernet address: {exc}",
-        )
-    addresses = {
-        entry["local"]
-        for device in address_payload
-        for entry in device.get("addr_info", ())
-        if entry.get("family") == "inet" and "local" in entry
-    }
-    if lidar.jetson_ip not in addresses:
-        return ProbeResult(
-            "lidar",
-            False,
-            (
-                f"{lidar.ethernet_interface} lacks {lidar.jetson_ip}; "
-                "run ./optflow lidar-network"
-            ),
-            {"addresses": sorted(addresses)},
-        )
-
-    try:
-        route_result = subprocess.run(
-            ["ip", "-j", "route", "get", lidar.lidar_ip],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        route_payload = json.loads(route_result.stdout)
-        route_interface = route_payload[0].get("dev")
-    except (
-        FileNotFoundError,
-        IndexError,
-        json.JSONDecodeError,
-        subprocess.CalledProcessError,
-    ) as exc:
-        return ProbeResult(
-            "lidar", False, f"Cannot inspect JT16 route: {exc}"
-        )
-    if route_interface != lidar.ethernet_interface:
-        return ProbeResult(
-            "lidar",
-            False,
-            (
-                f"Traffic to {lidar.lidar_ip} uses {route_interface}, "
-                f"not {lidar.ethernet_interface}"
-            ),
-        )
-
-    packet_count = 0
-    source_ips: set[str] = set()
-    listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.settimeout(0.1)
-    try:
-        listener.bind(("0.0.0.0", lidar.udp_port))
-        deadline = time.monotonic() + lidar.packet_probe_s
-        while time.monotonic() < deadline:
+    endpoint = Path(lidar.symlink)
+    if not endpoint.exists():
+        adapter_present = False
+        for vendor_path in Path("/sys/bus/usb/devices").glob("*/idVendor"):
             try:
-                _, source = listener.recvfrom(65535)
-            except socket.timeout:
+                device_path = vendor_path.parent
+                vendor = int(
+                    vendor_path.read_text(encoding="ascii").strip(), 16
+                )
+                product = int(
+                    (device_path / "idProduct")
+                    .read_text(encoding="ascii")
+                    .strip(),
+                    16,
+                )
+                serial_path = device_path / "serial"
+                serial_number = (
+                    serial_path.read_text(encoding="ascii").strip()
+                    if serial_path.exists()
+                    else ""
+                )
+            except (OSError, ValueError):
                 continue
-            packet_count += 1
-            source_ips.add(source[0])
-    except OSError as exc:
+            if (
+                vendor == lidar.usb_vid
+                and product == lidar.usb_pid
+                and serial_number == lidar.usb_serial
+            ):
+                adapter_present = True
+                break
+        if adapter_present:
+            detail = (
+                f"{lidar.model} USB-RS485 adapter is present but "
+                f"{lidar.symlink} is absent; install the PL2303 driver"
+            )
+        else:
+            detail = (
+                f"{lidar.model} USB-RS485 adapter is absent; expected "
+                f"{lidar.usb_vid:04x}:{lidar.usb_pid:04x} "
+                f"serial={lidar.usb_serial}"
+            )
         return ProbeResult(
             "lidar",
             False,
-            f"Unable to listen on UDP {lidar.udp_port}: {exc}",
+            detail,
+            {"adapter_present": adapter_present},
         )
-    finally:
-        listener.close()
 
-    if packet_count == 0:
-        verification = (
-            "verified"
-            if lidar.network_values_verified
-            else "provisional and must be verified"
+    try:
+        import serial
+    except ImportError as exc:
+        return ProbeResult("lidar", False, f"pyserial unavailable: {exc}")
+
+    baud_candidates = (
+        (lidar.baud,)
+        if lidar.baud_verified
+        else (lidar.baud, lidar.legacy_baud)
+    )
+    observations: list[dict[str, int]] = []
+    for baud in baud_candidates:
+        payload = bytearray()
+        try:
+            with serial.Serial(
+                lidar.symlink,
+                baudrate=baud,
+                timeout=0.05,
+                exclusive=True,
+            ) as connection:
+                connection.reset_input_buffer()
+                deadline = time.monotonic() + lidar.packet_probe_s
+                while time.monotonic() < deadline:
+                    chunk = connection.read(65536)
+                    if chunk:
+                        payload.extend(chunk)
+        except (OSError, serial.SerialException, ValueError) as exc:
+            return ProbeResult(
+                "lidar",
+                False,
+                f"Unable to read {lidar.symlink} at {baud}: {exc}",
+            )
+        observations.append(
+            {
+                "baud": baud,
+                "bytes": len(payload),
+                "header_candidates": payload.count(b"\xee\xff"),
+            }
         )
-        return ProbeResult(
-            "lidar",
-            False,
-            (
-                f"No {lidar.model} packets on UDP {lidar.udp_port}; "
-                f"IP plan {lidar.lidar_ip} -> {lidar.jetson_ip} is {verification}"
-            ),
+
+    best = max(
+        observations,
+        key=lambda item: (item["header_candidates"], item["bytes"]),
+    )
+    bridge_path = Path(lidar.bridge_binary)
+    if not bridge_path.is_absolute():
+        bridge_path = PROJECT_ROOT / bridge_path
+    correction_path = Path(lidar.correction_file)
+    if not correction_path.is_absolute():
+        correction_path = PROJECT_ROOT / correction_path
+    bridge_ready = bridge_path.is_file() and os.access(bridge_path, os.X_OK)
+    correction_ready = correction_path.is_file()
+    stream_ready = (
+        best["header_candidates"] >= 5 and best["bytes"] >= 400
+    )
+    available = stream_ready and bridge_ready and correction_ready
+    if available:
+        detail = (
+            f"{lidar.model} serial stream at {best['baud']} baud; "
+            f"bytes={best['bytes']}; "
+            f"packet headers={best['header_candidates']}; "
+            "Hesai SDK bridge and correction file ready"
         )
-    expected_source_seen = lidar.lidar_ip in source_ips
+    elif stream_ready:
+        missing = []
+        if not bridge_ready:
+            missing.append("SDK bridge")
+        if not correction_ready:
+            missing.append("correction file")
+        detail = (
+            f"{lidar.model} serial bytes are present, but "
+            f"{', '.join(missing)} is missing"
+        )
+    else:
+        detail = (
+            f"No valid-looking {lidar.model} serial stream on "
+            f"{lidar.symlink}; observations={observations}"
+        )
     return ProbeResult(
         "lidar",
-        expected_source_seen,
-        (
-            f"{packet_count} UDP packets from "
-            f"{', '.join(sorted(source_ips))}; expected {lidar.lidar_ip}"
-        ),
+        available,
+        detail,
         {
-            "packet_count": packet_count,
-            "source_ips": sorted(source_ips),
-            "expected_source_seen": expected_source_seen,
+            "selected_baud": best["baud"] if available else None,
+            "observations": observations,
+            "framing_only": True,
+            "bridge_ready": bridge_ready,
+            "bridge_path": str(bridge_path),
+            "correction_ready": correction_ready,
+            "correction_path": str(correction_path),
+            "correction_verified": lidar.correction_verified,
         },
     )
 

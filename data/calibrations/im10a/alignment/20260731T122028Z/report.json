@@ -1,0 +1,458 @@
+{
+  "created_utc": "2026-07-31T12:20:28.890117+00:00",
+  "kind": "im10a_dynamic_alignment",
+  "result": "candidate_ready",
+  "schema_version": 1,
+  "sessions": [
+    {
+      "cube_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.0003145082342056163,
+          "correlation": 0.9859198500936712,
+          "cube_rate_per_imu_rate": 0.9570195038916753,
+          "cube_receive_time_lag_relative_to_imu_s": -0.017999999999999933,
+          "imu_timestamp_advance_crosscheck_s": 0.017999999999999933,
+          "matched_samples": 6088,
+          "rmse_rads": 0.006712666408374766
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0006198033584928794,
+          "correlation": 0.9904387959670985,
+          "cube_rate_per_imu_rate": 0.9631514872186874,
+          "cube_receive_time_lag_relative_to_imu_s": -0.018999999999999934,
+          "imu_timestamp_advance_crosscheck_s": 0.018999999999999934,
+          "matched_samples": 6133,
+          "rmse_rads": 0.007081004275384457
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": 3.724314464454109e-05,
+          "correlation": 0.9996302757008065,
+          "cube_rate_per_imu_rate": 1.0072968189476006,
+          "cube_receive_time_lag_relative_to_imu_s": -0.017999999999999933,
+          "imu_timestamp_advance_crosscheck_s": 0.017999999999999933,
+          "matched_samples": 10251,
+          "rmse_rads": 0.0030875727215581615
+        }
+      },
+      "lidar_odometry_rate_alignment": {
+        "x": {
+          "accepted": false,
+          "bias_rads": 0.0010912797222776562,
+          "correlation": 0.9414883142761286,
+          "matched_intervals": 155,
+          "odometry_rate_per_imu_rate": 1.1263377292933825,
+          "rmse_rads": 0.012384556154893889,
+          "time_offset_lidar_to_imu_candidate_s": 0.012000000000000094
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": 6.399763940960696e-05,
+          "correlation": 0.9741024932202921,
+          "matched_intervals": 148,
+          "odometry_rate_per_imu_rate": 1.0707319993728999,
+          "rmse_rads": 0.010748003048007862,
+          "time_offset_lidar_to_imu_candidate_s": 0.0070000000000000895
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": 0.00034287223955541905,
+          "correlation": 0.9983246847622567,
+          "matched_intervals": 249,
+          "odometry_rate_per_imu_rate": 1.0147632801792048,
+          "rmse_rads": 0.00663851827018773,
+          "time_offset_lidar_to_imu_candidate_s": 0.014000000000000096
+        }
+      },
+      "session": "/home/atas/vscode/optFlow_slam/data/recordings/lio/20260731T101712Z_lio-shadow",
+      "source_sha256": {
+        "cube_reference.ndjson": "4e845a71a3a48cfbf5e8b7f631aee678d2a4ba7dec88f5860235bf05e5bdeb2c",
+        "lio_imu.ndjson": "50c17fb809e81647213e2df8daea3c6e57ddb0a9b4cd1b4e844479ab7aa0d18e",
+        "lio_odometry.ndjson": "a7dd96bb4442deadc2ac1d610a8e86bc3928a03e2013ad8a2198022bbc98fe0e"
+      },
+      "status": "complete",
+      "visual_guide": "yaw"
+    },
+    {
+      "cube_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.0009924848473029256,
+          "correlation": 0.9769010443491236,
+          "cube_rate_per_imu_rate": 0.9153123513026976,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01399999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01399999999999993,
+          "matched_samples": 5329,
+          "rmse_rads": 0.014175385442473853
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0004825329237059241,
+          "correlation": 0.9684269522324279,
+          "cube_rate_per_imu_rate": 0.8844487217539279,
+          "cube_receive_time_lag_relative_to_imu_s": -0.010999999999999927,
+          "imu_timestamp_advance_crosscheck_s": 0.010999999999999927,
+          "matched_samples": 5078,
+          "rmse_rads": 0.015581530086873442
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": 6.946421622677871e-05,
+          "correlation": 0.9852577957777974,
+          "cube_rate_per_imu_rate": 0.9724575570252635,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01399999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01399999999999993,
+          "matched_samples": 6236,
+          "rmse_rads": 0.010427326654848773
+        }
+      },
+      "lidar_odometry_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.00038129340938400304,
+          "correlation": 0.9823549981144717,
+          "matched_intervals": 141,
+          "odometry_rate_per_imu_rate": 1.0603781782137955,
+          "rmse_rads": 0.012152366761344803,
+          "time_offset_lidar_to_imu_candidate_s": 0.010000000000000092
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0007039237997677771,
+          "correlation": 0.9905034988520498,
+          "matched_intervals": 130,
+          "odometry_rate_per_imu_rate": 1.1255958787473221,
+          "rmse_rads": 0.00912953024028115,
+          "time_offset_lidar_to_imu_candidate_s": 0.0070000000000000895
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": 0.0005074230713409341,
+          "correlation": 0.9926699278064576,
+          "matched_intervals": 141,
+          "odometry_rate_per_imu_rate": 1.0654029677293566,
+          "rmse_rads": 0.00788314339332818,
+          "time_offset_lidar_to_imu_candidate_s": 0.014000000000000096
+        }
+      },
+      "session": "/home/atas/vscode/optFlow_slam/data/recordings/lio/20260731T103008Z_lio-shadow",
+      "source_sha256": {
+        "cube_reference.ndjson": "b8e7b0f8858ad5f530d71bd90b9667e86ed9d99c274b2fd6655bdc9af1b26379",
+        "lio_imu.ndjson": "119d55be0af96149866044ddb259941511a2ed7653b0a13ab0f7f40271c00ff1",
+        "lio_odometry.ndjson": "cb9ddc99356a8bfff3fbd93a0067da0e62b579470a579b272c2515d72803c80c"
+      },
+      "status": "complete",
+      "visual_guide": "translation"
+    },
+    {
+      "cube_rate_alignment": {
+        "x": {
+          "accepted": false,
+          "bias_rads": 0.00031913090080036647,
+          "correlation": 0.9471295492509301,
+          "cube_rate_per_imu_rate": 0.8361102607385618,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01599999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01599999999999993,
+          "matched_samples": 5205,
+          "rmse_rads": 0.013462307640698213
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": 0.000750871923358085,
+          "correlation": 0.9653354150701876,
+          "cube_rate_per_imu_rate": 0.8678218374335812,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01499999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01499999999999993,
+          "matched_samples": 4901,
+          "rmse_rads": 0.01232258997825526
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": -0.00011270785011049272,
+          "correlation": 0.975260639250307,
+          "cube_rate_per_imu_rate": 0.953539563047073,
+          "cube_receive_time_lag_relative_to_imu_s": -0.017999999999999933,
+          "imu_timestamp_advance_crosscheck_s": 0.017999999999999933,
+          "matched_samples": 6174,
+          "rmse_rads": 0.012666167149720116
+        }
+      },
+      "lidar_odometry_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.0010357736299573483,
+          "correlation": 0.9590972735134435,
+          "matched_intervals": 128,
+          "odometry_rate_per_imu_rate": 1.129280235423382,
+          "rmse_rads": 0.012716822039109475,
+          "time_offset_lidar_to_imu_candidate_s": 0.006000000000000089
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0008369485147714141,
+          "correlation": 0.9724374778213193,
+          "matched_intervals": 120,
+          "odometry_rate_per_imu_rate": 1.1639665851632293,
+          "rmse_rads": 0.011541497520229019,
+          "time_offset_lidar_to_imu_candidate_s": 0.003000000000000086
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": 0.0001302946378307667,
+          "correlation": 0.9867244204741336,
+          "matched_intervals": 140,
+          "odometry_rate_per_imu_rate": 1.0856918412416245,
+          "rmse_rads": 0.009815023901631605,
+          "time_offset_lidar_to_imu_candidate_s": 0.003000000000000086
+        }
+      },
+      "session": "/home/atas/vscode/optFlow_slam/data/recordings/lio/20260731T104126Z_lio-shadow",
+      "source_sha256": {
+        "cube_reference.ndjson": "c74ca0a919b2b0c0b36844604062cbf112c2256759415a8b4a91de45664a5d73",
+        "lio_imu.ndjson": "06345a1b09134d128e75f813c12512d158abc9afc70eb7fe5a48b2a13622793f",
+        "lio_odometry.ndjson": "bf0b5db21e5dac4dc74ee61ef1fd456cde57578347b62bcedec9bf72ddb1c4a6"
+      },
+      "status": "complete",
+      "visual_guide": "translation"
+    },
+    {
+      "cube_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": -0.00016133391080610528,
+          "correlation": 0.957948624443667,
+          "cube_rate_per_imu_rate": 0.8954213428089661,
+          "cube_receive_time_lag_relative_to_imu_s": -0.016999999999999932,
+          "imu_timestamp_advance_crosscheck_s": 0.016999999999999932,
+          "matched_samples": 4802,
+          "rmse_rads": 0.01457962181679391
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": 1.2655517481897048e-05,
+          "correlation": 0.9678160852929416,
+          "cube_rate_per_imu_rate": 0.8875785582911203,
+          "cube_receive_time_lag_relative_to_imu_s": -0.011999999999999927,
+          "imu_timestamp_advance_crosscheck_s": 0.011999999999999927,
+          "matched_samples": 4092,
+          "rmse_rads": 0.015116027736012146
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": -0.00014695931636550313,
+          "correlation": 0.9819905808024286,
+          "cube_rate_per_imu_rate": 0.9543154307070588,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01599999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01599999999999993,
+          "matched_samples": 5327,
+          "rmse_rads": 0.010269894004772424
+        }
+      },
+      "lidar_odometry_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": -4.643478755979964e-05,
+          "correlation": 0.9800774217518536,
+          "matched_intervals": 116,
+          "odometry_rate_per_imu_rate": 1.098584805443439,
+          "rmse_rads": 0.009874799416299129,
+          "time_offset_lidar_to_imu_candidate_s": 0.011000000000000093
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0007232343477959191,
+          "correlation": 0.9860094308346175,
+          "matched_intervals": 97,
+          "odometry_rate_per_imu_rate": 1.1301836136272154,
+          "rmse_rads": 0.010657654951869811,
+          "time_offset_lidar_to_imu_candidate_s": 0.009000000000000091
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": 0.0007086638169465714,
+          "correlation": 0.9880184090164265,
+          "matched_intervals": 115,
+          "odometry_rate_per_imu_rate": 1.101788594221091,
+          "rmse_rads": 0.009274816632542187,
+          "time_offset_lidar_to_imu_candidate_s": 0.010000000000000092
+        }
+      },
+      "session": "/home/atas/vscode/optFlow_slam/data/recordings/lio/20260731T105837Z_lio-shadow",
+      "source_sha256": {
+        "cube_reference.ndjson": "d4f0f237de92584b1e2af75a970a6a4a7a96887aca7f7f0403609dbc0168808a",
+        "lio_imu.ndjson": "7226dffb5e4a330cbb39b3c1c45df60d3dd349cf6dedb13ecffdc1f160567857",
+        "lio_odometry.ndjson": "0b796171f88f2f74eb0f061b88941d309b67bd7d981e3541233bd60f5c53bc75"
+      },
+      "status": "complete",
+      "visual_guide": "translation"
+    },
+    {
+      "cube_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.0006461708113790886,
+          "correlation": 0.9609839855543836,
+          "cube_rate_per_imu_rate": 0.8853376889239893,
+          "cube_receive_time_lag_relative_to_imu_s": -0.016999999999999932,
+          "imu_timestamp_advance_crosscheck_s": 0.016999999999999932,
+          "matched_samples": 5404,
+          "rmse_rads": 0.010223759087590094
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.00045238884584191015,
+          "correlation": 0.9790679956244867,
+          "cube_rate_per_imu_rate": 0.8789093666166647,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01499999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01499999999999993,
+          "matched_samples": 5795,
+          "rmse_rads": 0.010484797665198201
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": -0.0004504893125559828,
+          "correlation": 0.9989584429744301,
+          "cube_rate_per_imu_rate": 1.003989719377001,
+          "cube_receive_time_lag_relative_to_imu_s": -0.016999999999999932,
+          "imu_timestamp_advance_crosscheck_s": 0.016999999999999932,
+          "matched_samples": 8899,
+          "rmse_rads": 0.006684646083245066
+        }
+      },
+      "lidar_odometry_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.00019634620191262423,
+          "correlation": 0.9778778654277869,
+          "matched_intervals": 123,
+          "odometry_rate_per_imu_rate": 1.0863183099096962,
+          "rmse_rads": 0.007628978078793821,
+          "time_offset_lidar_to_imu_candidate_s": 0.009000000000000091
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0008605688335033607,
+          "correlation": 0.9830349251975877,
+          "matched_intervals": 153,
+          "odometry_rate_per_imu_rate": 1.0709007127294925,
+          "rmse_rads": 0.009425723659950395,
+          "time_offset_lidar_to_imu_candidate_s": 0.013000000000000095
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": -0.00017296563384589116,
+          "correlation": 0.9992063565325304,
+          "matched_intervals": 208,
+          "odometry_rate_per_imu_rate": 1.0072938730864702,
+          "rmse_rads": 0.00599462771588555,
+          "time_offset_lidar_to_imu_candidate_s": 0.022000000000000103
+        }
+      },
+      "session": "/home/atas/vscode/optFlow_slam/data/recordings/lio/20260731T120956Z_lio-shadow",
+      "source_sha256": {
+        "cube_reference.ndjson": "b5979aaedf001b206cb69ba52b9d85e5e9842222556f5c2da68faa199650a4e1",
+        "lio_imu.ndjson": "ced939025c1babb0505c67cc9c93250bbdd297fd513aea0fd8ed821b7bc6ce7e",
+        "lio_odometry.ndjson": "6a5fec1af9aedc66bde10e1f36f35158efaf7a2b3522043a7af848129ce64c7e"
+      },
+      "status": "complete",
+      "visual_guide": "yaw"
+    },
+    {
+      "cube_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": -0.0010607916882334832,
+          "correlation": 0.973715581364109,
+          "cube_rate_per_imu_rate": 0.9012307254477164,
+          "cube_receive_time_lag_relative_to_imu_s": -0.017999999999999933,
+          "imu_timestamp_advance_crosscheck_s": 0.017999999999999933,
+          "matched_samples": 3769,
+          "rmse_rads": 0.018527792581647783
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0011814000209245776,
+          "correlation": 0.9743576520087561,
+          "cube_rate_per_imu_rate": 0.9087873453324354,
+          "cube_receive_time_lag_relative_to_imu_s": -0.016999999999999932,
+          "imu_timestamp_advance_crosscheck_s": 0.016999999999999932,
+          "matched_samples": 3302,
+          "rmse_rads": 0.015993301725386322
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": -0.0001532487309673634,
+          "correlation": 0.9745915700057268,
+          "cube_rate_per_imu_rate": 0.9276736993184619,
+          "cube_receive_time_lag_relative_to_imu_s": -0.01399999999999993,
+          "imu_timestamp_advance_crosscheck_s": 0.01399999999999993,
+          "matched_samples": 4339,
+          "rmse_rads": 0.013834492582371738
+        }
+      },
+      "lidar_odometry_rate_alignment": {
+        "x": {
+          "accepted": true,
+          "bias_rads": 0.000989886055347576,
+          "correlation": 0.9827390061945919,
+          "matched_intervals": 99,
+          "odometry_rate_per_imu_rate": 1.0251523226299488,
+          "rmse_rads": 0.014225190102107228,
+          "time_offset_lidar_to_imu_candidate_s": 0.009000000000000091
+        },
+        "y": {
+          "accepted": true,
+          "bias_rads": -0.0004610738955304805,
+          "correlation": 0.9837894163935367,
+          "matched_intervals": 79,
+          "odometry_rate_per_imu_rate": 1.1019948507009196,
+          "rmse_rads": 0.013060101464665973,
+          "time_offset_lidar_to_imu_candidate_s": 0.010000000000000092
+        },
+        "z": {
+          "accepted": true,
+          "bias_rads": -0.00016697892483631379,
+          "correlation": 0.990827011317832,
+          "matched_intervals": 86,
+          "odometry_rate_per_imu_rate": 1.0440067583487986,
+          "rmse_rads": 0.009182854211501766,
+          "time_offset_lidar_to_imu_candidate_s": 0.010000000000000092
+        }
+      },
+      "session": "/home/atas/vscode/optFlow_slam/data/recordings/lio/20260731T121719Z_lio-shadow",
+      "source_sha256": {
+        "cube_reference.ndjson": "2301a847e0983d4a7534baff10dfee4462536db0d6be21cd7bc3d9d7fd424861",
+        "lio_imu.ndjson": "607bb7b4bf0189534e52a6546238b721f494442850d51302119f69da617353ba",
+        "lio_odometry.ndjson": "70c337a7d13295ec029c8978c262a04a9d83a36359763c61b7c2219300c442b3"
+      },
+      "status": "complete",
+      "visual_guide": "translation"
+    }
+  ],
+  "summary": {
+    "accepted_cube_session_crosschecks_s": [
+      0.017999999999999933,
+      0.01399999999999993,
+      0.01649999999999993,
+      0.01599999999999993,
+      0.016999999999999932,
+      0.016999999999999932
+    ],
+    "accepted_lidar_session_offsets_s": [
+      0.010500000000000093,
+      0.010000000000000092,
+      0.003000000000000086,
+      0.010000000000000092,
+      0.013000000000000095,
+      0.010000000000000092
+    ],
+    "apply_automatically": false,
+    "candidate_crosscheck_difference_s": 0.0067499999999998395,
+    "cube_crosscheck_s": 0.01674999999999993,
+    "note": "FAST-LIO subtracts this positive candidate from IMU stamps. Cube receive-time correlation is a sign cross-check, not an absolute timing reference.",
+    "requires_shadow_ab_validation": true,
+    "time_offset_lidar_to_imu_candidate_s": 0.010000000000000092
+  }
+}

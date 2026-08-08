@@ -11,12 +11,14 @@ import time
 from typing import Any
 
 from .config import ConfigError, ProjectConfig, load_config
+from .mavlink_compat import install_pymavlink_instance_guard
 from .paths import (
     CALIBRATION_DIR,
     CONFIG_DIR,
     PROJECT_ROOT,
     ensure_runtime_directories,
 )
+from .runtime_lock import cube_mavlink_lock
 
 
 DEFAULT_CONFIG = CONFIG_DIR / "system.yaml"
@@ -36,14 +38,14 @@ def desired_mount_parameters(config: ProjectConfig) -> dict[str, float]:
     return values
 
 
-def _parameter_name(message: Any) -> str:
+def parameter_name(message: Any) -> str:
     value = message.param_id
     if isinstance(value, bytes):
         value = value.decode("ascii", errors="replace")
     return str(value).rstrip("\x00")
 
 
-def _send_gcs_heartbeat(master: Any) -> None:
+def send_gcs_heartbeat(master: Any) -> None:
     from pymavlink import mavutil
 
     master.mav.heartbeat_send(
@@ -55,29 +57,40 @@ def _send_gcs_heartbeat(master: Any) -> None:
     )
 
 
-def _read_parameters(
+def read_parameters(
     master: Any,
     names: set[str],
     timeout_s: float = 45.0,
 ) -> dict[str, tuple[float, int]]:
+    install_pymavlink_instance_guard()
     found: dict[str, tuple[float, int]] = {}
     deadline = time.monotonic() + timeout_s
     last_stream_packet = time.monotonic()
     next_heartbeat = time.monotonic() + 1.0
     next_request = time.monotonic()
+    next_missing_request = time.monotonic() + 3.0
     stream_started = False
 
     while time.monotonic() < deadline:
         now = time.monotonic()
         if not stream_started and now >= next_request:
-            _send_gcs_heartbeat(master)
+            send_gcs_heartbeat(master)
             master.mav.param_request_list_send(
                 master.target_system,
                 master.target_component,
             )
             next_request = now + 3.0
+        if now >= next_missing_request:
+            for name in sorted(names - found.keys()):
+                master.mav.param_request_read_send(
+                    master.target_system,
+                    master.target_component,
+                    name.encode("ascii"),
+                    -1,
+                )
+            next_missing_request = now + 1.0
         if now >= next_heartbeat:
-            _send_gcs_heartbeat(master)
+            send_gcs_heartbeat(master)
             next_heartbeat = now + 1.0
         message = master.recv_match(
             type="PARAM_VALUE", blocking=True, timeout=0.25
@@ -93,9 +106,11 @@ def _read_parameters(
         if int(message.param_index) != 65535:
             stream_started = True
             last_stream_packet = time.monotonic()
-        name = _parameter_name(message)
+        name = parameter_name(message)
         if name in names:
             found[name] = (float(message.param_value), int(message.param_type))
+            if found.keys() == names:
+                return found
 
     missing = ", ".join(sorted(names - found.keys()))
     if missing:
@@ -103,14 +118,15 @@ def _read_parameters(
     return found
 
 
-def _write_parameter(
+def write_parameter(
     master: Any,
     name: str,
     desired: float,
     timeout_s: float = 3.0,
 ) -> float:
+    install_pymavlink_instance_guard()
     for _attempt in range(5):
-        _send_gcs_heartbeat(master)
+        send_gcs_heartbeat(master)
         time.sleep(0.1)
         master.param_set_send(name, desired)
         deadline = time.monotonic() + timeout_s
@@ -118,7 +134,7 @@ def _write_parameter(
             message = master.recv_match(
                 type="PARAM_VALUE", blocking=True, timeout=0.25
             )
-            if message is None or _parameter_name(message) != name:
+            if message is None or parameter_name(message) != name:
                 continue
             actual = float(message.param_value)
             if math.isclose(actual, desired, rel_tol=0.0, abs_tol=0.0005):
@@ -132,7 +148,8 @@ def _backup_path() -> Path:
     return CALIBRATION_DIR / f"cube-mount-parameters-before-{timestamp}.json"
 
 
-def _wait_for_cube_heartbeat(master: Any, mavutil: Any, timeout_s: float) -> Any:
+def wait_for_cube_heartbeat(master: Any, mavutil: Any, timeout_s: float) -> Any:
+    install_pymavlink_instance_guard(mavutil)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         message = master.recv_match(
@@ -142,6 +159,8 @@ def _wait_for_cube_heartbeat(master: Any, mavutil: Any, timeout_s: float) -> Any
             message is not None
             and message.autopilot
             == mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA
+            and message.get_srcComponent()
+            == mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
         ):
             return message
     return None
@@ -202,14 +221,16 @@ def main() -> int:
     fc = config.flight_controller
     desired = desired_mount_parameters(config)
     master = None
+    hardware_lock = cube_mavlink_lock("Cube mount parameter tool")
     try:
+        hardware_lock.acquire()
         master = mavutil.mavlink_connection(
             fc.endpoint,
             baud=fc.baud,
             source_system=255,
             source_component=mavutil.mavlink.MAV_COMP_ID_MISSIONPLANNER,
         )
-        heartbeat = _wait_for_cube_heartbeat(
+        heartbeat = wait_for_cube_heartbeat(
             master, mavutil, fc.heartbeat_timeout_s
         )
         if heartbeat is None:
@@ -219,7 +240,7 @@ def main() -> int:
 
         master.target_system = heartbeat.get_srcSystem()
         master.target_component = heartbeat.get_srcComponent()
-        current_with_types = _read_parameters(master, set(desired))
+        current_with_types = read_parameters(master, set(desired))
         current = {
             name: value
             for name, (value, _param_type) in current_with_types.items()
@@ -243,10 +264,10 @@ def main() -> int:
         print(f"Backup: {backup_path}")
 
         written = {
-            name: _write_parameter(master, name, value)
+            name: write_parameter(master, name, value)
             for name, value in desired.items()
         }
-        verified_with_types = _read_parameters(master, set(desired))
+        verified_with_types = read_parameters(master, set(desired))
         verified = {
             name: value
             for name, (value, _param_type) in verified_with_types.items()
@@ -267,6 +288,7 @@ def main() -> int:
     finally:
         if master is not None:
             master.close()
+        hardware_lock.release()
 
 
 if __name__ == "__main__":

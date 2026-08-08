@@ -1,0 +1,142 @@
+{
+  "config_sha256": "edff20114c63cde7bfd5e271ba2113f1748119df6758855d46ad57130ad8da69",
+  "config_source": "/home/atas/vscode/optFlow_slam/config/system.yaml",
+  "correction_file": "/home/atas/vscode/optFlow_slam/data/calibrations/jt16/JT16_sample_angle-2.csv",
+  "correction_sha256": "8dd90c9ad1e4ab22ce7c95777b311b0e6bf11e7c30818552ca19b7037de3dbb0",
+  "created_utc": "2026-07-31T12:37:59.895664+00:00",
+  "floor": null,
+  "floor_error": "not enough downward JT16 points to isolate the floor",
+  "frames": 51,
+  "gates": {
+    "all_16_rings_covered": true,
+    "correction_file_validated_for_unit": true,
+    "lidar_to_body_rotation_verified": false
+  },
+  "kind": "jt16_wall_floor_reanalysis",
+  "points": 485392,
+  "raw_samples": "/home/atas/vscode/optFlow_slam/data/calibrations/jt16/planes/20260731T123553Z-wall-floor/points.npz",
+  "raw_samples_sha256": "32cea3c0a589d8dad3b1878cc3572d0893b7642b86be683e8ea0903a32a3fd5c",
+  "recommended_config": {
+    "apply_automatically": false,
+    "correction_verified": true,
+    "lidar_to_body_extrinsics_verified": false
+  },
+  "result": "fail",
+  "schema_version": 1,
+  "wall": {
+    "distance_error_m": 0.0012015106486611415,
+    "inlier_fraction": 0.8547186662697231,
+    "inliers": 40194,
+    "normal_body_frd": [
+      0.9990486627682132,
+      0.043593326138386346,
+      0.0011795495908663524
+    ],
+    "normal_error_deg": 2.4994204172431798,
+    "plane_distance_m": 2.498798489351339,
+    "points": 47026,
+    "residual_max_m": 0.037986479223157676,
+    "residual_p95_m": 0.025655396245643676,
+    "residual_rmse_m": 0.012158938497493185,
+    "rings": [
+      {
+        "median_residual_m": -0.002332251952992248,
+        "points": 3575,
+        "residual_p95_m": 0.16640420621994956,
+        "ring": 0
+      },
+      {
+        "median_residual_m": -0.002069677553260263,
+        "points": 3785,
+        "residual_p95_m": 0.2993807381457967,
+        "ring": 1
+      },
+      {
+        "median_residual_m": 0.002102501513553623,
+        "points": 3785,
+        "residual_p95_m": 0.28299157573519595,
+        "ring": 2
+      },
+      {
+        "median_residual_m": 0.005586936151605215,
+        "points": 3585,
+        "residual_p95_m": 0.21539139228443727,
+        "ring": 3
+      },
+      {
+        "median_residual_m": -0.0061448686421110565,
+        "points": 3785,
+        "residual_p95_m": 0.2661278027400389,
+        "ring": 4
+      },
+      {
+        "median_residual_m": -0.0027497255135653376,
+        "points": 3785,
+        "residual_p95_m": 0.23912364282132526,
+        "ring": 5
+      },
+      {
+        "median_residual_m": 0.004218575575405836,
+        "points": 3785,
+        "residual_p95_m": 0.25641572471924334,
+        "ring": 6
+      },
+      {
+        "median_residual_m": -0.008871553418299705,
+        "points": 3785,
+        "residual_p95_m": 0.14821595110758964,
+        "ring": 7
+      },
+      {
+        "median_residual_m": -0.01615878510810642,
+        "points": 1140,
+        "residual_p95_m": 0.15265812187300165,
+        "ring": 8
+      },
+      {
+        "median_residual_m": -0.007242326954016942,
+        "points": 1013,
+        "residual_p95_m": 0.11800895829489,
+        "ring": 9
+      },
+      {
+        "median_residual_m": -0.011049502715609005,
+        "points": 963,
+        "residual_p95_m": 0.22440567171774362,
+        "ring": 10
+      },
+      {
+        "median_residual_m": -0.0029129264235701058,
+        "points": 1053,
+        "residual_p95_m": 0.24237096222479781,
+        "ring": 11
+      },
+      {
+        "median_residual_m": -0.005953636861117939,
+        "points": 1659,
+        "residual_p95_m": 0.2418639177536912,
+        "ring": 12
+      },
+      {
+        "median_residual_m": -0.010612862599854722,
+        "points": 3776,
+        "residual_p95_m": 0.02989382769639537,
+        "ring": 13
+      },
+      {
+        "median_residual_m": 0.00503654561359923,
+        "points": 3776,
+        "residual_p95_m": 0.024113402097395986,
+        "ring": 14
+      },
+      {
+        "median_residual_m": 0.004456667205202436,
+        "points": 3776,
+        "residual_p95_m": 0.024690249365300843,
+        "ring": 15
+      }
+    ],
+    "target_distance_m": 2.5,
+    "vertical_selection_limit_m": 2.9999999999999996
+  }
+}

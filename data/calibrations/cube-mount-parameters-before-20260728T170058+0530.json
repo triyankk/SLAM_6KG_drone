@@ -1,0 +1,32 @@
+{
+  "captured_at": "2026-07-28T17:00:58.448285+05:30",
+  "config_path": "config/system.yaml",
+  "cube": {
+    "component_id": 1,
+    "system_id": 1
+  },
+  "current": {
+    "AHRS_ORIENTATION": 6.0,
+    "INS_POS1_X": 0.0,
+    "INS_POS1_Y": 0.07000000029802322,
+    "INS_POS1_Z": 0.0,
+    "INS_POS2_X": 0.0,
+    "INS_POS2_Y": 0.0,
+    "INS_POS2_Z": 0.0,
+    "INS_POS3_X": 0.0,
+    "INS_POS3_Y": 0.0,
+    "INS_POS3_Z": 0.0
+  },
+  "desired": {
+    "AHRS_ORIENTATION": 6.0,
+    "INS_POS1_X": 0.08,
+    "INS_POS1_Y": 0.0,
+    "INS_POS1_Z": -0.08,
+    "INS_POS2_X": 0.08,
+    "INS_POS2_Y": 0.0,
+    "INS_POS2_Z": -0.08,
+    "INS_POS3_X": 0.08,
+    "INS_POS3_Y": 0.0,
+    "INS_POS3_Z": -0.08
+  }
+}

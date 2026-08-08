@@ -5,13 +5,25 @@ project:
   stage: hardware_bringup
 
 flight_controller:
+  # TELEM2 UART passed a disarmed 15/15 parameter read audit on 2026-08-08.
+  # OA-only uses direct UART at 460800 and paced short DISTANCE_SENSOR packets.
+  # The router and the high-rate SLAM telemetry request are disabled.
   endpoint: /dev/ttyTHS1
-  baud: 921600
+  baud: 460800
   system_id: 1
+  companion_system_id: 1
   companion_component_id: 191
   heartbeat_timeout_s: 5.0
   sample_window_s: 3.0
   hflow_min_bench_quality: 1
+  router:
+    enabled: false
+    serial_endpoint: /dev/ttyTHS1
+    bind_host: 127.0.0.1
+    bind_port: 14600
+    client_host: 127.0.0.1
+    client_port: 14601
+    status_file: runtime/mavlink_router_status.json
   cube_mount:
     position_from_cg_frd_m:
       x: 0.08
@@ -39,34 +51,181 @@ sensors:
     stream_host: 0.0.0.0
     stream_port: 8770
     jpeg_quality: 82
+    # Initial measured translation; verify rotation and target direction on bench.
+    position_from_cg_frd_m:
+      x: 0.19
+      y: 0.00
+      z: 0.10
+    rotation_from_forward_frd_deg:
+      roll: 0.00
+      pitch: 0.00
+      yaw: 0.00
   external_imu:
     model: IM10A
     symlink: /dev/imu_usb
     usb_vid: 0x1A86
     usb_pid: 0x7523
-    baud: 9600
-    expected_rate_hz: 10
+    baud: 230400
+    expected_rate_hz: 200
+    # Verified 2026-07-31: TIME + ACC + GYRO at 199.84 Hz with no checksum,
+    # payload, ordering, or drop errors. The zero-calendar TIME value is a
+    # relative sensor clock; the bridge does not treat it as UTC.
+    sensor_time_enabled: true
     body_axis_signs:
       x: 1
       y: -1
       z: -1
     axis_map_verified: true
     axis_map_verification: 2026-07-29 dynamic gyro correlation
+    # Confirmed 2026-07-31: mounted directly over the Cube IMU, 0.01 m above it.
+    # Cube IMU position is (+0.08, 0.00, -0.08) m from the CG.
+    position_from_cg_frd_m:
+      x: 0.08
+      y: 0.00
+      z: -0.09
+    position_verified: true
   lidar:
-    model: HESAI_JT16_MINI
-    ethernet_interface: enP8p1s0
-    lidar_ip: 192.168.1.201
-    jetson_ip: 192.168.1.100
-    jetson_prefix_length: 24
-    udp_port: 2368
+    model: HESAI_JT16
+    transport: serial_rs485
+    symlink: /dev/jt16_usb
+    usb_vid: 0x067B
+    usb_pid: 0x23A3
+    usb_serial: DCCEb114J19
+    baud: 3000000
+    legacy_baud: 3125000
+    baud_verified: true
     packet_probe_s: 1.0
-    network_values_verified: false
+    sdk_revision: 534c707846a810e8211b93446f878dbf415f7000
+    bridge_binary: build/jt16_bridge/optflow-jt16-bridge
+    # Hesai download-page table, physically validated on this unit 2026-07-31:
+    # all 16 rings, 0.0257 m wall p95, <= 0.0162 m ring median residual.
+    correction_file: data/calibrations/jt16/JT16_sample_angle-2.csv
+    correction_verified: true
+    # Lidar is centered laterally and mounted 0.10 m above CG.
+    position_from_cg_frd_m:
+      x: 0.00
+      y: 0.00
+      z: -0.10
+    # Verified 2026-07-30 by the completed four-cardinal target sequence. The
+    # forward/right/rear/left targets resolved to 5/95/-175/-90 deg after this
+    # rotation, each within the configured 5 deg sector tolerance.
+    rotation_to_body_frd_deg:
+      roll: 0.00
+      pitch: 0.00
+      yaw: 180.00
+
+lidar_inertial_odometry:
+  stage: shadow
+  backend: hesai_fast_lio2
+  backend_revision: bb2842d34990761eebbd4cc3188e94c7c662a673
+  runtime_dir: runtime/lio
+  pointcloud_topic: /optflow/jt16/points
+  imu_topic: /optflow/im10a/imu
+  odometry_topic: /Odometry
+  diagnostics_topic: /optflow/lio/diagnostics
+  # Explicit bench-only output. The sender first proves every EKF source set
+  # excludes ExternalNav and stops immediately if the Cube arms.
+  odometry_shadow_to_cube_enabled: true
+  # Active ExternalNav fusion remains disabled.
+  pose_output_to_cube_enabled: false
+  map_output_enabled: false
+  required_imu_rate_hz: 200
+  clock_sync:
+    window_samples: 2000
+    # The count cap represents about 10 s of IMU data but 400 s of JT16 data.
+    # Time caps keep each affine fit local as USB callback latency drifts.
+    maximum_imu_window_span_s: 20.0
+    maximum_lidar_window_span_s: 60.0
+    minimum_imu_samples: 200
+    minimum_lidar_samples: 20
+    minimum_span_s: 2.0
+    # Five dynamic sessions resolve the IM10A/JT16 offset to +10 ms. A matched
+    # yaw run improved Cube/LIO attitude p95 from 2.84 deg at zero offset to
+    # 2.27 deg. Keep the global sync gate false until D415 timing is aligned.
+    time_offset_lidar_to_imu_s: 0.010
+    maximum_drift_ppm: 5000
+    maximum_imu_residual_p95_ms: 5.0
+    maximum_lidar_residual_p95_ms: 15.0
+  validation:
+    approved: false
+    report_path: ""
+    report_sha256: ""
+    minimum_duration_s: 60.0
+    minimum_odometry_rate_hz: 4.0
+    stationary_window_s: 5.0
+    maximum_stationary_drift_m: 0.15
+    maximum_return_to_start_error_m: 0.35
+    maximum_position_jump_m: 0.50
+    maximum_speed_mps: 3.0
+    maximum_attitude_jump_deg: 10.0
+    maximum_clock_resets: 0
+    # Cube LOCAL_POSITION_NED is an independent comparison signal during
+    # shadow tests, not ground truth and never an input to this estimator.
+    minimum_cube_reference_samples: 100
+    minimum_cube_reference_path_m: 2.0
+    maximum_cube_horizontal_rmse_m: 0.50
+    maximum_cube_vertical_rmse_m: 0.40
+    maximum_cube_attitude_p95_deg: 10.0
+    minimum_cube_path_ratio: 0.70
+    maximum_cube_path_ratio: 1.30
+
+obstacle_avoidance:
+  stage: active
+  mavlink_output_enabled: true
+  # Outdoor D415 depth was intermittent in the 2026-08-03 flight. Keep it in
+  # mapping/visual diagnostics, but do not let it drive Cube proximity.
+  depth_camera_enabled: false
+  lidar_enabled: true
+  # Hard horizontal exclusion radius measured from the aircraft CG after
+  # applying each sensor's body-frame translation and rotation.
+  hard_cg_clearance_m: 1.50
+  target_rate_hz: 10.0
+  # JT16 publishes near 4-5 Hz. Allow one normal frame interval plus jitter,
+  # while remaining below Cube's 0.50 s Guided command timeout.
+  source_stale_timeout_s: 0.45
+  sector_increment_deg: 5.0
+  min_distance_m: 0.30
+  max_distance_m: 8.00
+  body_z_min_m: -0.40
+  body_z_max_m: 0.40
+  depth_percentile: 10.0
+  depth_sample_stride: 2
+  minimum_points_per_sector: 8
+  temporal_window: 3
+  # 0.85 m opposite motor centers and 18 in props give a 0.6536 m
+  # physical radius. Keep 0.0964 m additional planning clearance.
+  airframe_radius_m: 0.75
+  airframe_geometry_verified: true
+  rc_toggle:
+    channel: 7
+    engage_pwm: 1700
+    disengage_pwm: 1300
+  alerts:
+    enabled: true
+    only_when_armed: true
+    # From 1.50 m to 2.00 m this is warning-only. At or inside the
+    # 1.50 m CG boundary, Cube-native avoidance is responsible for motion.
+    warning_distance_m: 2.00
+    escalation_distance_m: 1.25
+    warning_rate_hz: 1.0
+    keepout_rate_hz: 3.0
+    maximum_rate_hz: 10.0
+  native_avoidance:
+    proximity_type: 2
+    enable_mask: 7
+    behavior: 0
+    rc_option: 40
+    backup_speed_mps: 0.50
+    acceleration_max_mpss: 1.00
 
 calibration:
-  camera_intrinsics_verified: false
+  # Verified 2026-07-30 at 1.50 m and 2.50 m using the factory table.
+  camera_intrinsics_verified: true
   camera_to_body_extrinsics_verified: false
-  imu_to_body_extrinsics_verified: false
-  lidar_to_body_extrinsics_verified: false
+  # Verified 2026-07-31 from physical position plus six-session x/y/z dynamic
+  # gyro correlation against Cube and lidar odometry.
+  imu_to_body_extrinsics_verified: true
+  lidar_to_body_extrinsics_verified: true
   imu_noise_profile_verified: false
   sensor_time_sync_verified: false
 
@@ -80,9 +239,45 @@ navigation:
   initial_max_horizontal_speed_mps: 0.5
   initial_max_vertical_speed_mps: 0.3
   initial_max_yaw_rate_dps: 20.0
-  obstacle_stop_distance_m: 2.0
-  local_pose_stale_timeout_s: 0.20
+  # FAST-LIO publishes near 5 Hz (about 0.20 s/sample). Allow one missed
+  # update while still failing before Cube's 0.50 s Guided timeout.
+  local_pose_stale_timeout_s: 0.45
   command_stale_timeout_s: 0.50
+  slam_return:
+    # The complete Guided-velocity path runs in monitor mode while locked.
+    # Enabling live output requires an approved flight report, every physical
+    # calibration gate, and a digest-bound approval marker.
+    stage: locked
+    live_control_enabled: false
+    approval_file: runtime/approvals/slam_return_live.json
+    status_file: runtime/slam_navigation_status.json
+    required_mode: GUIDED
+    # RC7=avoidance, RC8=FlowHold, RC10=Land, RC11=motor emergency stop.
+    # RC9 is unassigned in ArduPilot and is read directly as a low-to-high
+    # SLAM-return request. RC10 remains a pilot-commanded Cube LAND function.
+    rc_channel: 9
+    land_rc_channel: 10
+    engage_pwm: 1700
+    disengage_pwm: 1300
+    ekf_source_set: 1
+    minimum_altitude_m: 1.00
+    maximum_altitude_m: 8.00
+    minimum_flow_quality: 50
+    telemetry_stale_timeout_s: 0.35
+    battery_stale_timeout_s: 2.00
+    minimum_voltage_v: 22.20
+    command_rate_hz: 10.0
+    # Initial commissioning limit. The config loader enforces an absolute
+    # 0.75 m/s ceiling even if this value is tuned later.
+    maximum_horizontal_speed_mps: 0.30
+    maximum_horizontal_acceleration_mpss: 0.50
+    arrival_radius_m: 0.20
+    breadcrumb_spacing_m: 0.15
+    waypoint_radius_m: 0.12
+    # Dense RGB-D odometry is currently about 0.87 Hz on the flight Jetson.
+    # LIO and obstacle scans remain the faster primary safety feeds.
+    visual_stale_timeout_s: 2.00
+    visual_disagreement_limit_m: 0.35
 
 safety:
   props_off_for_bench: true
@@ -90,5 +285,5 @@ safety:
     - STABILIZE
     - GUIDED_NOGPS
   standard_rtl_allowed_without_global_position: false
-  rc_disarm_switch_configured: false
+  rc_disarm_switch_configured: true
   automatic_ekf_source_switching_enabled: false

@@ -1,0 +1,31 @@
+{
+  "serial": "327322062285",
+  "wall_distance_from_camera_m": 1.5,
+  "expected_wall_distance_from_cg_m": 1.69,
+  "depth_scale_m": 0.0010000000474974513,
+  "samples": 60,
+  "center_roi_median_m": 1.5470000734785572,
+  "center_roi_temporal_min_m": 1.54200007324107,
+  "center_roi_temporal_max_m": 1.5960000758059323,
+  "center_roi_p10_m": 1.529000072623603,
+  "center_roi_p90_m": 1.5630000742385164,
+  "center_roi_valid_fraction": 1.0,
+  "intrinsics": {
+    "width": 640,
+    "height": 480,
+    "fx": 601.666748046875,
+    "fy": 601.666748046875,
+    "ppx": 323.4305419921875,
+    "ppy": 243.91197204589844,
+    "model": "distortion.brown_conrady",
+    "coeffs": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "rgb_image": "data/calibrations/d415/2026-07-30-wall-camera-1p50m-rgb.png",
+  "depth_image": "data/calibrations/d415/2026-07-30-wall-camera-1p50m-depth.png"
+}

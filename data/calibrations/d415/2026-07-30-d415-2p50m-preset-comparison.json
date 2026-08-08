@@ -1,0 +1,40 @@
+{
+  "serial": "327322062285",
+  "ground_truth_m": 2.5,
+  "stream": "640x480 depth at 30 Hz",
+  "original_visual_preset": 0.0,
+  "original_settings_path": "data/calibrations/d415/2026-07-30-d415-runtime-advanced-settings-before-2p50m.json",
+  "original_settings_sha256": "e897aee6e0276babbf4ac78abacd520af2c8b41d47649a45fb2ab4279c097ecd",
+  "restored_settings_sha256": "e897aee6e0276babbf4ac78abacd520af2c8b41d47649a45fb2ab4279c097ecd",
+  "settings_restored_exactly": true,
+  "baseline": {
+    "samples": 90,
+    "median_m": 2.5330002307891846,
+    "min_m": 2.5270001888275146,
+    "max_m": 2.5330002307891846,
+    "error_m": 0.03300023078918457,
+    "error_percent": 1.3200092315673828,
+    "center_valid_fraction": 1.0,
+    "frame_valid_fraction": 0.5239583333333333
+  },
+  "high_accuracy": {
+    "samples": 90,
+    "median_m": 2.5390000343322754,
+    "min_m": 2.5330002307891846,
+    "max_m": 2.5390000343322754,
+    "error_m": 0.03900003433227539,
+    "error_percent": 1.5600013732910156,
+    "center_valid_fraction": 1.0,
+    "frame_valid_fraction": 0.52375
+  },
+  "restored": {
+    "samples": 90,
+    "median_m": 2.5390000343322754,
+    "min_m": 2.5390000343322754,
+    "max_m": 2.5390000343322754,
+    "error_m": 0.03900003433227539,
+    "error_percent": 1.5600013732910156,
+    "center_valid_fraction": 1.0,
+    "frame_valid_fraction": 0.5238541666666667
+  }
+}

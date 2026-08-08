@@ -1,0 +1,46 @@
+{
+  "serial": "327322062285",
+  "ground_truth_mm": 2500.0,
+  "target": "wall with upward magenta arrow",
+  "visual_preset": "high_accuracy",
+  "written_to_flash": false,
+  "original_sha256": "11bb46d8dd75f87865372fc7637a71bed43b9513e7cdad6140a5e7ba6a161697",
+  "candidate_path": "data/calibrations/d415/2026-07-30-d415-tare-2500mm-candidate-not-written.bin",
+  "candidate_sha256": "be58f398dad0b1070e7dd8fb995a711063dfaae2bf6e154296abc7e1860be245",
+  "loaded_candidate_sha256": "11bb46d8dd75f87865372fc7637a71bed43b9513e7cdad6140a5e7ba6a161697",
+  "candidate_loaded_in_ram": false,
+  "restored_sha256": "11bb46d8dd75f87865372fc7637a71bed43b9513e7cdad6140a5e7ba6a161697",
+  "original_restored_in_ram": true,
+  "health": [
+    0.0044587887823581696,
+    0.0044587887823581696
+  ],
+  "progress_final": 100.0,
+  "before": {
+    "samples": 90,
+    "median_m": 2.503000020980835,
+    "min_m": 2.4790000915527344,
+    "max_m": 2.5230000019073486,
+    "error_m": 0.003000020980834961,
+    "error_percent": 0.12000083923339844,
+    "valid_fraction": 1.0
+  },
+  "candidate_in_ram": {
+    "samples": 90,
+    "median_m": 2.505000114440918,
+    "min_m": 2.4830000400543213,
+    "max_m": 2.5270001888275146,
+    "error_m": 0.005000114440917969,
+    "error_percent": 0.20000457763671872,
+    "valid_fraction": 1.0
+  },
+  "restored_original": {
+    "samples": 90,
+    "median_m": 2.507000207901001,
+    "min_m": 2.4870002269744873,
+    "max_m": 2.5270001888275146,
+    "error_m": 0.0070002079010009766,
+    "error_percent": 0.28000831604003906,
+    "valid_fraction": 1.0
+  }
+}

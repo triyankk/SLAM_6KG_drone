@@ -1,0 +1,80 @@
+{
+  "retrieved_utc_date": "2026-07-30",
+  "source_page": "https://www.hesaitech.com/product_downloads/jt16/",
+  "download_url": "https://www.hesaitech.com/wp-content/uploads/2025/01/JT16_sample_angle-2.csv",
+  "filename": "JT16_sample_angle-2.csv",
+  "sha256": "8dd90c9ad1e4ab22ce7c95777b311b0e6bf11e7c30818552ca19b7037de3dbb0",
+  "scope": "Hesai-published JT16 sample angle table; not a serial-number certificate",
+  "wall_checks": [
+    {
+      "date": "2026-07-30",
+      "body_bearing_deg": 0.0,
+      "target_distance_m": 2.5,
+      "ground_truth_uncertainty_m": 0.06,
+      "center_sector_distance_m": 2.46,
+      "conservative_neighbor_distance_m": 2.44,
+      "measured_mount_yaw_deg": 180.0,
+      "rings_observed": 16,
+      "accepted": true
+    },
+    {
+      "date": "2026-07-30",
+      "body_bearing_deg": 90.0,
+      "target_distance_m": 2.5,
+      "ground_truth_uncertainty_m": 0.06,
+      "center_sector_distance_m": 2.44,
+      "conservative_neighbor_distance_m": 2.44,
+      "rings_observed": 16,
+      "accepted": true
+    },
+    {
+      "date": "2026-07-30",
+      "body_bearing_deg": 180.0,
+      "target_distance_m": 2.5,
+      "ground_truth_uncertainty_m": 0.06,
+      "center_sector_distance_m": 2.44,
+      "conservative_neighbor_distance_m": 2.44,
+      "rings_observed": 16,
+      "accepted": true
+    },
+    {
+      "date": "2026-07-30",
+      "body_bearing_deg": -90.0,
+      "target_distance_m": 2.5,
+      "ground_truth_uncertainty_m": 0.06,
+      "center_sector_distance_m": 2.47,
+      "conservative_neighbor_distance_m": 2.45,
+      "rings_observed": 16,
+      "accepted": true
+    }
+  ],
+  "mount_yaw_cardinal_check_passed": true,
+  "hard_boundary_cardinal_check": {
+    "date": "2026-07-30",
+    "report": "data/calibrations/jt16/cardinal_runs/20260730T150333Z.json",
+    "target_distance_m": 1.5,
+    "target_tolerance_m": 0.08,
+    "settle_seconds": 10,
+    "completed": true,
+    "measurements": {
+      "left_m": 1.5,
+      "forward_m": 1.47,
+      "right_m": 1.49,
+      "rear_m": 1.48
+    }
+  },
+  "hard_boundary_cardinal_check_passed": true,
+  "unit_plane_check": {
+    "date": "2026-07-31",
+    "report": "data/calibrations/jt16/planes/20260731T123553Z-wall-floor/reanalysis.json",
+    "report_sha256": "ddb30e0a15830e5af79cd7c73e7e25bc3ee88a5ffc2f97425851623e22a99e23",
+    "target_distance_m": 2.5,
+    "measured_distance_m": 2.498798489351339,
+    "residual_p95_m": 0.025655396245643676,
+    "maximum_ring_median_residual_m": 0.01615878510810642,
+    "rings_observed": 16,
+    "accepted": true
+  },
+  "correction_file_plane_check_passed": true,
+  "verified_for_active_avoidance": false
+}

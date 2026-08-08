@@ -1,0 +1,24 @@
+{
+  "serial": "327322062285",
+  "operation": "on_chip_candidate_only",
+  "applied_to_session": false,
+  "written_to_flash": false,
+  "original_table_path": "data/calibrations/d415/2026-07-30-d415-original-calibration-table.bin",
+  "original_table_sha256": "11bb46d8dd75f87865372fc7637a71bed43b9513e7cdad6140a5e7ba6a161697",
+  "candidate_table_path": "data/calibrations/d415/2026-07-30-d415-on-chip-candidate-not-applied.bin",
+  "candidate_table_sha256": "745a7559694eb2898c42d1db6779f92e2c26ff42c2e634674d4cae610cc8bb68",
+  "candidate_differs_from_original": true,
+  "health": [
+    -0.2104339897632599,
+    0.0
+  ],
+  "calibration_json": {
+    "calib type": 0,
+    "speed": 4,
+    "scan parameter": 0,
+    "white wall mode": 1
+  },
+  "progress_final": 100.0,
+  "previous_visual_preset": 0.0,
+  "check_visual_preset": 3.0
+}

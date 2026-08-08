@@ -1,0 +1,142 @@
+{
+  "capture_duration_s": 11.734050826002203,
+  "config_sha256": "edff20114c63cde7bfd5e271ba2113f1748119df6758855d46ad57130ad8da69",
+  "config_source": "/home/atas/vscode/optFlow_slam/config/system.yaml",
+  "correction_file": "/home/atas/vscode/optFlow_slam/data/calibrations/jt16/JT16_sample_angle-2.csv",
+  "correction_sha256": "8dd90c9ad1e4ab22ce7c95777b311b0e6bf11e7c30818552ca19b7037de3dbb0",
+  "created_utc": "2026-07-31T12:36:06.150299+00:00",
+  "floor": null,
+  "floor_error": "not enough downward JT16 points to isolate the floor",
+  "frames": 51,
+  "gates": {
+    "all_16_rings_covered": false,
+    "correction_file_validated_for_unit": false,
+    "lidar_to_body_rotation_verified": false
+  },
+  "kind": "jt16_wall_floor_calibration",
+  "points": 485392,
+  "raw_samples": "points.npz",
+  "raw_samples_sha256": "32cea3c0a589d8dad3b1878cc3572d0893b7642b86be683e8ea0903a32a3fd5c",
+  "recommended_config": {
+    "apply_automatically": false,
+    "correction_verified": false,
+    "lidar_to_body_extrinsics_verified": false
+  },
+  "result": "fail",
+  "schema_version": 1,
+  "wall": {
+    "distance_error_m": 0.0019365595960296744,
+    "inlier_fraction": 0.8275355714213378,
+    "inliers": 32686,
+    "normal_body_frd": [
+      0.999093780063974,
+      0.04221978118353844,
+      -0.0053952492337340134
+    ],
+    "normal_error_deg": 2.439423700297571,
+    "plane_distance_m": 2.5019365595960297,
+    "points": 39498,
+    "residual_max_m": 0.03621520347974183,
+    "residual_p95_m": 0.024184600277708634,
+    "residual_rmse_m": 0.011449373935852493,
+    "rings": [
+      {
+        "median_residual_m": -0.0045918746501318886,
+        "points": 3575,
+        "residual_p95_m": 0.16982305338221604,
+        "ring": 0
+      },
+      {
+        "median_residual_m": -0.003582232617574288,
+        "points": 3785,
+        "residual_p95_m": 0.3021129966686773,
+        "ring": 1
+      },
+      {
+        "median_residual_m": 0.0016818622036200992,
+        "points": 3785,
+        "residual_p95_m": 0.2850857784479981,
+        "ring": 2
+      },
+      {
+        "median_residual_m": 0.005495730369344365,
+        "points": 3585,
+        "residual_p95_m": 0.214093487754345,
+        "ring": 3
+      },
+      {
+        "median_residual_m": -0.005844230266091266,
+        "points": 3785,
+        "residual_p95_m": 0.2666231038742586,
+        "ring": 4
+      },
+      {
+        "median_residual_m": -0.0008627558051843565,
+        "points": 3785,
+        "residual_p95_m": 0.23891776297479606,
+        "ring": 5
+      },
+      {
+        "median_residual_m": 0.006837290312730282,
+        "points": 3785,
+        "residual_p95_m": 0.255465854187392,
+        "ring": 6
+      },
+      {
+        "median_residual_m": -0.005405737913218189,
+        "points": 3785,
+        "residual_p95_m": 0.14625328170900698,
+        "ring": 7
+      },
+      {
+        "median_residual_m": -0.011272616679052216,
+        "points": 1140,
+        "residual_p95_m": 0.14707798685553986,
+        "ring": 8
+      },
+      {
+        "median_residual_m": -0.0026036604012769082,
+        "points": 1013,
+        "residual_p95_m": 0.11847029316511111,
+        "ring": 9
+      },
+      {
+        "median_residual_m": -0.005209860023648982,
+        "points": 963,
+        "residual_p95_m": 0.21717816213996732,
+        "ring": 10
+      },
+      {
+        "median_residual_m": 0.005621892753554292,
+        "points": 1053,
+        "residual_p95_m": 0.23431424722518085,
+        "ring": 11
+      },
+      {
+        "median_residual_m": 0.003252606536888969,
+        "points": 1659,
+        "residual_p95_m": 0.23272527860355957,
+        "ring": 12
+      },
+      {
+        "median_residual_m": -0.0015923745302459658,
+        "points": 3776,
+        "residual_p95_m": 0.024490709278874756,
+        "ring": 13
+      },
+      {
+        "median_residual_m": -0.01427069004107917,
+        "points": 24,
+        "residual_p95_m": 0.23786620620530782,
+        "ring": 14
+      },
+      {
+        "median_residual_m": null,
+        "points": 0,
+        "residual_p95_m": null,
+        "ring": 15
+      }
+    ],
+    "target_distance_m": 2.5
+  }
+}
