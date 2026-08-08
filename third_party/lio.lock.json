@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "platform": "Ubuntu 22.04 aarch64",
+  "dependencies": [
+    {
+      "name": "ROS 2 Humble binary archive",
+      "url": "https://github.com/ros2/ros2/releases/tag/release-humble-20260220",
+      "revision": "release-humble-20260220",
+      "sha256": "094b499f618d673d154a35784db4a94be4cd5701c43ee95e5d70551d08d21faa"
+    },
+    {
+      "name": "Point Cloud Library",
+      "url": "https://github.com/PointCloudLibrary/pcl",
+      "revision": "e8ed4be802f7d0b1acff2f8b01d7c5f381190e05",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "ROS pcl_msgs",
+      "url": "https://github.com/ros-perception/pcl_msgs",
+      "revision": "8a925a7c4626df52dba7ccc5bda5900d63678880",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "ROS pcl_conversions",
+      "url": "https://github.com/ros-perception/perception_pcl",
+      "revision": "67a5c2ba4c4de3ca21c5cd495812a01ced3fb69a",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "Hesai FAST-LIO2 for JT series",
+      "url": "https://github.com/HesaiTechnology-Spatial-Perception/FAST_LIO_Hesai",
+      "revision": "bb2842d34990761eebbd4cc3188e94c7c662a673",
+      "license": "GPL-2.0"
+    },
+    {
+      "name": "ikd-Tree",
+      "url": "https://github.com/hku-mars/ikd-Tree",
+      "revision": "e2e3f4e9d3b95a9e66b1ba83dc98d4a05ed8a3c4",
+      "license": "GPL-2.0"
+    }
+  ],
+  "local_patch": "third_party/patches/fast_lio_hesai-user-runtime.patch"
+}

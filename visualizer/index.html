@@ -13,13 +13,50 @@
     <title>Drone Motion Visualizer</title>
   </head>
   <body>
-    <main id="app">
-      <canvas id="scene" aria-label="Live three-dimensional H-Flow view"></canvas>
+    <div
+      id="visualCue"
+      class="visual-cue"
+      data-flashes="2"
+      role="status"
+      aria-live="assertive"
+      hidden
+    >
+      <strong id="visualCueMessage">MOVE DRONE NOW</strong>
+      <span id="visualCueDetail"></span>
+    </div>
+    <main id="app" data-view="spatial">
+      <canvas
+        id="scene"
+        class="motion-only"
+        aria-label="Live three-dimensional H-Flow view"
+      ></canvas>
 
       <header class="topbar">
         <div class="identity">
           <span class="product-name">DRONE MOTION</span>
           <span class="product-subtitle">Cube + optical flow + ROS IMU</span>
+        </div>
+        <div class="workspace-switcher" role="group" aria-label="Visualizer view">
+          <button
+            id="motionViewButton"
+            class="workspace-button"
+            type="button"
+            aria-pressed="false"
+            title="Motion instruments"
+          >
+            <i data-lucide="activity"></i>
+            <span>MOTION</span>
+          </button>
+          <button
+            id="spatialViewButton"
+            class="workspace-button is-active"
+            type="button"
+            aria-pressed="true"
+            title="Live 3D spatial scan"
+          >
+            <i data-lucide="map"></i>
+            <span>3D SCAN</span>
+          </button>
         </div>
         <div class="link-cluster">
           <span id="sourceBadge" class="source-badge">WAIT</span>
@@ -30,7 +67,10 @@
         </div>
       </header>
 
-      <aside class="telemetry-panel" aria-label="Optical-flow telemetry">
+      <aside
+        class="telemetry-panel motion-only"
+        aria-label="Optical-flow telemetry"
+      >
         <section class="telemetry-section flow-section">
           <div class="section-heading">
             <span>COMPENSATED FLOW</span>
@@ -179,7 +219,10 @@
         </section>
       </aside>
 
-      <section class="trace-panel" aria-label="Recent optical-flow trace">
+      <section
+        class="trace-panel motion-only"
+        aria-label="Recent optical-flow trace"
+      >
         <div class="section-heading">
           <span>10 SECOND TRACE</span>
           <span class="trace-legend">
@@ -190,7 +233,10 @@
         <canvas id="traceCanvas" width="600" height="220"></canvas>
       </section>
 
-      <section class="ros-imu-panel" aria-label="External ROS IMU motion">
+      <section
+        class="ros-imu-panel motion-only"
+        aria-label="External ROS IMU motion"
+      >
         <div class="ros-imu-heading">
           <span>ROS IMU</span>
           <span class="ros-imu-link">
@@ -222,7 +268,7 @@
         </div>
       </section>
 
-      <div class="axis-legend" aria-label="Aircraft body axes">
+      <div class="axis-legend motion-only" aria-label="Aircraft body axes">
         <span class="axis-forward"><i></i>FORWARD +X</span>
         <span class="axis-right"><i></i>RIGHT +Y</span>
         <span class="axis-flow"><i></i>FLOW m/s</span>
@@ -230,7 +276,236 @@
         <span class="axis-gyro"><i></i>GYRO</span>
       </div>
 
-      <nav class="controlbar" aria-label="Visualizer controls">
+      <section
+        id="spatialView"
+        class="spatial-view spatial-only"
+        aria-label="Live 3D spatial scan"
+      >
+        <canvas
+          id="mapScene"
+          aria-label="Live D415 and JT16 three-dimensional point cloud"
+        ></canvas>
+
+        <div class="spatial-status-strip" aria-live="polite">
+          <strong id="spatialFrameBadge">ROLLING LOCAL SCAN</strong>
+          <span id="slamStatusBadge" class="not-slam-badge">SLAM OFFLINE</span>
+          <span id="spatialConnection">STREAM CONNECTING</span>
+        </div>
+
+        <aside class="spatial-sidebar" aria-label="Spatial scan status">
+          <div class="spatial-sidebar-heading">
+            <div>
+              <span>LIVE 3D SCAN</span>
+              <strong>LOCAL SENSOR SPACE</strong>
+            </div>
+            <span id="poseStatus" class="pose-status">BODY ORIGIN</span>
+          </div>
+
+          <section class="cloud-source">
+            <div class="cloud-source-heading">
+              <label class="source-visibility">
+                <input id="lidarVisibility" type="checkbox" />
+                <i class="source-swatch lidar-swatch"></i>
+                <span>HESAI JT16</span>
+              </label>
+              <span class="cloud-link">
+                <i id="lidarCloudIndicator"></i>
+                <strong id="lidarCloudStatus">WAIT</strong>
+              </span>
+            </div>
+            <div class="cloud-source-metrics">
+              <span><strong id="lidarCloudPoints">0</strong> points</span>
+              <span id="lidarCloudRate">0.0 Hz</span>
+              <span id="lidarCloudAge">-- ms</span>
+            </div>
+          </section>
+
+          <section class="cloud-source">
+            <div class="cloud-source-heading">
+              <label class="source-visibility">
+                <input id="depthVisibility" type="checkbox" checked />
+                <i class="source-swatch depth-swatch"></i>
+                <span>REALSENSE D415</span>
+              </label>
+              <span class="cloud-link">
+                <i id="depthCloudIndicator"></i>
+                <strong id="depthCloudStatus">WAIT</strong>
+              </span>
+            </div>
+            <div class="cloud-source-metrics">
+              <span><strong id="depthCloudPoints">0</strong> points</span>
+              <span id="depthCloudRate">0.0 Hz</span>
+              <span id="depthCloudAge">-- ms</span>
+            </div>
+          </section>
+
+          <section class="spatial-metrics">
+            <div>
+              <span>VISIBLE POINTS</span>
+              <strong id="mapPoints">0</strong>
+            </div>
+            <div>
+              <span>SCAN FRAMES</span>
+              <strong id="mapFrames">0</strong>
+            </div>
+            <div>
+              <span>DROPPED</span>
+              <strong id="droppedFrames">0</strong>
+            </div>
+          </section>
+
+          <section
+            id="clearancePanel"
+            class="clearance-panel"
+            data-status="unknown"
+          >
+            <div class="clearance-heading">
+              <span>CG HARD CLEARANCE</span>
+              <strong id="clearanceStatus">UNKNOWN</strong>
+            </div>
+            <div class="clearance-metrics">
+              <div>
+                <span>LIMIT</span>
+                <strong id="clearanceLimit">1.50 m</strong>
+              </div>
+              <div>
+                <span>NEAREST</span>
+                <strong id="clearanceNearest">-- m</strong>
+              </div>
+              <div>
+                <span>MARGIN</span>
+                <strong id="clearanceMargin">-- m</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="pose-readout">
+            <div class="section-heading">
+              <span>CUBE LOCAL DELTA</span>
+              <span>m / m/s</span>
+            </div>
+            <div class="pose-grid">
+              <div><span>X</span><strong id="poseX">0.00</strong></div>
+              <div><span>Y</span><strong id="poseY">0.00</strong></div>
+              <div><span>Z</span><strong id="poseZ">0.00</strong></div>
+              <div><span>SPD</span><strong id="poseSpeed">0.00</strong></div>
+            </div>
+          </section>
+
+          <section class="frame-contract">
+            <div><span>POINT FRAME</span><strong>BODY FRD</strong></div>
+            <div>
+              <span>WORLD POSE</span><strong id="worldPoseContract">CUBE LOCAL</strong>
+            </div>
+            <div>
+              <span>HISTORY</span><strong id="historyContract">ROLLING</strong>
+            </div>
+            <p id="trajectoryDetail">SLAM STATUS OFFLINE</p>
+          </section>
+        </aside>
+
+        <div class="spatial-legend" aria-label="Spatial colors">
+          <span><i class="source-swatch lidar-swatch"></i>JT16 geometry</span>
+          <span><i class="source-swatch depth-swatch"></i>D415 RGB</span>
+          <span><i class="trajectory-swatch"></i>Telemetry path</span>
+          <span class="slam-trajectory-key">
+            <i class="lio-trajectory-swatch"></i>LIO
+          </span>
+          <span class="slam-trajectory-key">
+            <i class="rgbd-trajectory-swatch"></i>RGB-D
+          </span>
+          <span class="slam-trajectory-key">
+            <i class="breadcrumb-trajectory-swatch"></i>Return path
+          </span>
+          <span><i class="clearance-swatch"></i>1.50 m CG boundary</span>
+        </div>
+
+        <nav class="spatial-controlbar" aria-label="Spatial view controls">
+          <button
+            id="mapResetButton"
+            class="icon-button"
+            type="button"
+            title="Reset spatial camera"
+            aria-label="Reset spatial camera"
+          >
+            <i data-lucide="rotate-ccw"></i>
+          </button>
+          <button
+            id="mapTopButton"
+            class="icon-button"
+            type="button"
+            title="Top spatial view"
+            aria-label="Top spatial view"
+          >
+            <i data-lucide="scan"></i>
+          </button>
+          <button
+            id="mapFollowButton"
+            class="icon-button"
+            type="button"
+            title="Follow drone"
+            aria-label="Follow drone"
+          >
+            <i data-lucide="locate-fixed"></i>
+          </button>
+          <button
+            id="mapTrailButton"
+            class="icon-button"
+            type="button"
+            title="Toggle rolling scan history"
+            aria-label="Toggle rolling scan history"
+          >
+            <i data-lucide="layers"></i>
+          </button>
+          <button
+            id="mapTrajectoryButton"
+            class="icon-button is-active"
+            type="button"
+            title="Toggle SLAM trajectories"
+            aria-label="Toggle SLAM trajectories"
+            aria-pressed="true"
+          >
+            <i data-lucide="route"></i>
+          </button>
+          <button
+            id="mapClearButton"
+            class="icon-button"
+            type="button"
+            title="Clear scan history"
+            aria-label="Clear scan history"
+          >
+            <i data-lucide="trash-2"></i>
+          </button>
+          <label class="spatial-slider" title="Rendered point diameter">
+            <span>POINT</span>
+            <input
+              id="pointSize"
+              type="range"
+              min="0.015"
+              max="0.100"
+              value="0.025"
+              step="0.005"
+              aria-label="Rendered point diameter"
+            />
+            <output id="pointSizeValue">0.025 m</output>
+          </label>
+          <label class="spatial-slider" title="Rolling scan history">
+            <span>TRAIL</span>
+            <input
+              id="trailSeconds"
+              type="range"
+              min="1"
+              max="12"
+              value="2"
+              step="1"
+              aria-label="Rolling scan history"
+            />
+            <output id="trailSecondsValue">2 s</output>
+          </label>
+        </nav>
+      </section>
+
+      <nav class="controlbar motion-only" aria-label="Visualizer controls">
         <button
           id="pauseButton"
           class="icon-button"
@@ -313,7 +588,9 @@
         </button>
       </nav>
 
-      <div id="displayState" class="display-state" hidden>DISPLAY PAUSED</div>
+      <div id="displayState" class="display-state motion-only" hidden>
+        DISPLAY PAUSED
+      </div>
     </main>
 
     <script type="module" src="/src/main.js"></script>

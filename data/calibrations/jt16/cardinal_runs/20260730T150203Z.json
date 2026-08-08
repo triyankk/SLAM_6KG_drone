@@ -1,0 +1,916 @@
+{
+  "completed": false,
+  "duration_s": 10.0,
+  "finished_utc": "2026-07-30T15:02:30.565668+00:00",
+  "settle_seconds": 10,
+  "shadow_only": true,
+  "start_direction": "left",
+  "started_utc": "2026-07-30T15:02:03.672506+00:00",
+  "steps": [
+    {
+      "bearing_deg": -90.0,
+      "direction": "left",
+      "measured_angle_deg": -90.0,
+      "measured_distance_m": 1.5,
+      "passed": false,
+      "payload": {
+        "duration_s": 10.0,
+        "events": [
+          {
+            "details": {
+              "baud": 3000000,
+              "correction_file": "/home/atas/vscode/optFlow_slam/data/calibrations/jt16/JT16_sample_angle-2.csv",
+              "correction_verified": false,
+              "endpoint": "/dev/jt16_usb",
+              "sdk_revision": "534c707846a810e8211b93446f878dbf415f7000"
+            },
+            "event": "sdk_bridge_started",
+            "source": "lidar"
+          },
+          {
+            "details": {
+              "capture_frames_preserved": 46,
+              "scope": "capture_finalization_only"
+            },
+            "event": "sdk_bridge_forced_stop",
+            "source": "lidar"
+          }
+        ],
+        "fused": {
+          "clearance": {
+            "breached": true,
+            "distance_metric": "horizontal_xy",
+            "frame": "body_frd",
+            "margin_m": -0.75,
+            "nearest_distance_m": 0.75,
+            "reference": "aircraft_cg",
+            "required_distance_m": 1.5,
+            "status": "breach",
+            "violating_sector_angles_deg": [
+              0.0,
+              5.0,
+              10.0,
+              15.0,
+              20.0,
+              45.0,
+              50.0,
+              55.0,
+              60.0,
+              65.0,
+              70.0,
+              115.0,
+              120.0,
+              125.0,
+              130.0,
+              135.0,
+              140.0,
+              145.0,
+              150.0,
+              155.0,
+              160.0,
+              165.0,
+              170.0,
+              175.0,
+              180.0,
+              -175.0,
+              -170.0,
+              -165.0,
+              -160.0,
+              -155.0,
+              -150.0,
+              -145.0,
+              -140.0,
+              -135.0,
+              -130.0,
+              -125.0,
+              -90.0,
+              -85.0,
+              -80.0,
+              -50.0,
+              -45.0,
+              -40.0,
+              -35.0,
+              -30.0,
+              -15.0,
+              -10.0,
+              -5.0
+            ],
+            "violating_sector_count": 47,
+            "violating_sector_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              42,
+              43,
+              44,
+              45,
+              46,
+              47,
+              54,
+              55,
+              56,
+              62,
+              63,
+              64,
+              65,
+              66,
+              69,
+              70,
+              71
+            ]
+          },
+          "known_sectors": [
+            {
+              "angle_deg": 0.0,
+              "distance_m": 0.92
+            },
+            {
+              "angle_deg": 5.0,
+              "distance_m": 0.88
+            },
+            {
+              "angle_deg": 10.0,
+              "distance_m": 0.83
+            },
+            {
+              "angle_deg": 15.0,
+              "distance_m": 0.83
+            },
+            {
+              "angle_deg": 20.0,
+              "distance_m": 0.93
+            },
+            {
+              "angle_deg": 25.0,
+              "distance_m": 1.54
+            },
+            {
+              "angle_deg": 30.0,
+              "distance_m": 1.6
+            },
+            {
+              "angle_deg": 35.0,
+              "distance_m": 1.68
+            },
+            {
+              "angle_deg": 40.0,
+              "distance_m": 1.73
+            },
+            {
+              "angle_deg": 45.0,
+              "distance_m": 0.78
+            },
+            {
+              "angle_deg": 50.0,
+              "distance_m": 0.75
+            },
+            {
+              "angle_deg": 55.0,
+              "distance_m": 0.77
+            },
+            {
+              "angle_deg": 60.0,
+              "distance_m": 0.87
+            },
+            {
+              "angle_deg": 65.0,
+              "distance_m": 0.99
+            },
+            {
+              "angle_deg": 70.0,
+              "distance_m": 1.14
+            },
+            {
+              "angle_deg": 75.0,
+              "distance_m": 3.15
+            },
+            {
+              "angle_deg": 80.0,
+              "distance_m": 3.39
+            },
+            {
+              "angle_deg": 85.0,
+              "distance_m": 3.36
+            },
+            {
+              "angle_deg": 90.0,
+              "distance_m": 2.96
+            },
+            {
+              "angle_deg": 95.0,
+              "distance_m": 2.79
+            },
+            {
+              "angle_deg": 100.0,
+              "distance_m": 2.81
+            },
+            {
+              "angle_deg": 105.0,
+              "distance_m": 2.99
+            },
+            {
+              "angle_deg": 110.0,
+              "distance_m": 1.59
+            },
+            {
+              "angle_deg": 115.0,
+              "distance_m": 1.38
+            },
+            {
+              "angle_deg": 120.0,
+              "distance_m": 1.41
+            },
+            {
+              "angle_deg": 125.0,
+              "distance_m": 1.47
+            },
+            {
+              "angle_deg": 130.0,
+              "distance_m": 1.2
+            },
+            {
+              "angle_deg": 135.0,
+              "distance_m": 1.18
+            },
+            {
+              "angle_deg": 140.0,
+              "distance_m": 1.24
+            },
+            {
+              "angle_deg": 145.0,
+              "distance_m": 1.25
+            },
+            {
+              "angle_deg": 150.0,
+              "distance_m": 1.18
+            },
+            {
+              "angle_deg": 155.0,
+              "distance_m": 1.13
+            },
+            {
+              "angle_deg": 160.0,
+              "distance_m": 0.95
+            },
+            {
+              "angle_deg": 165.0,
+              "distance_m": 0.91
+            },
+            {
+              "angle_deg": 170.0,
+              "distance_m": 0.78
+            },
+            {
+              "angle_deg": 175.0,
+              "distance_m": 0.79
+            },
+            {
+              "angle_deg": 180.0,
+              "distance_m": 0.78
+            },
+            {
+              "angle_deg": -175.0,
+              "distance_m": 0.89
+            },
+            {
+              "angle_deg": -170.0,
+              "distance_m": 0.89
+            },
+            {
+              "angle_deg": -165.0,
+              "distance_m": 0.8
+            },
+            {
+              "angle_deg": -160.0,
+              "distance_m": 0.9
+            },
+            {
+              "angle_deg": -155.0,
+              "distance_m": 0.97
+            },
+            {
+              "angle_deg": -150.0,
+              "distance_m": 1.02
+            },
+            {
+              "angle_deg": -145.0,
+              "distance_m": 1.07
+            },
+            {
+              "angle_deg": -140.0,
+              "distance_m": 1.13
+            },
+            {
+              "angle_deg": -135.0,
+              "distance_m": 1.22
+            },
+            {
+              "angle_deg": -130.0,
+              "distance_m": 1.33
+            },
+            {
+              "angle_deg": -125.0,
+              "distance_m": 1.46
+            },
+            {
+              "angle_deg": -120.0,
+              "distance_m": 1.69
+            },
+            {
+              "angle_deg": -115.0,
+              "distance_m": 1.69
+            },
+            {
+              "angle_deg": -110.0,
+              "distance_m": 1.62
+            },
+            {
+              "angle_deg": -105.0,
+              "distance_m": 1.57
+            },
+            {
+              "angle_deg": -100.0,
+              "distance_m": 1.54
+            },
+            {
+              "angle_deg": -95.0,
+              "distance_m": 1.51
+            },
+            {
+              "angle_deg": -90.0,
+              "distance_m": 1.5
+            },
+            {
+              "angle_deg": -85.0,
+              "distance_m": 1.5
+            },
+            {
+              "angle_deg": -80.0,
+              "distance_m": 1.48
+            },
+            {
+              "angle_deg": -75.0,
+              "distance_m": 1.51
+            },
+            {
+              "angle_deg": -70.0,
+              "distance_m": 1.54
+            },
+            {
+              "angle_deg": -65.0,
+              "distance_m": 1.58
+            },
+            {
+              "angle_deg": -60.0,
+              "distance_m": 1.64
+            },
+            {
+              "angle_deg": -55.0,
+              "distance_m": 1.72
+            },
+            {
+              "angle_deg": -50.0,
+              "distance_m": 1.42
+            },
+            {
+              "angle_deg": -45.0,
+              "distance_m": 1.35
+            },
+            {
+              "angle_deg": -40.0,
+              "distance_m": 1.27
+            },
+            {
+              "angle_deg": -35.0,
+              "distance_m": 1.24
+            },
+            {
+              "angle_deg": -30.0,
+              "distance_m": 1.36
+            },
+            {
+              "angle_deg": -25.0,
+              "distance_m": 1.56
+            },
+            {
+              "angle_deg": -20.0,
+              "distance_m": 2.15
+            },
+            {
+              "angle_deg": -15.0,
+              "distance_m": 1.14
+            },
+            {
+              "angle_deg": -10.0,
+              "distance_m": 1.07
+            },
+            {
+              "angle_deg": -5.0,
+              "distance_m": 0.99
+            }
+          ],
+          "nearest_distance_m": 0.75,
+          "source": "lidar",
+          "valid_sector_count": 72
+        },
+        "geometry_verified": {
+          "airframe": true,
+          "camera_extrinsics": false,
+          "lidar_baud": true,
+          "lidar_correction": false,
+          "lidar_extrinsics": false
+        },
+        "mavlink_output_sent": false,
+        "missing_sources": [],
+        "mode": "bench_shadow_only",
+        "sensor_timing_sample_count": 46,
+        "source_stats": {
+          "lidar": {
+            "active_duration_s": 9.023314689,
+            "baud": 3000000,
+            "bridge_exit_code": -9,
+            "bridge_forced_stop": true,
+            "bridge_forced_stop_scope": "capture_finalization_only",
+            "endpoint": "/dev/jt16_usb",
+            "extraction_errors": 0,
+            "frame_rate_hz": 4.987,
+            "frames": 46,
+            "latest_points": 9600,
+            "point_timestamp_span_s": 0.20017004013061523,
+            "points": 436720,
+            "raw_bytes": 2225920,
+            "ring_max": 15,
+            "ring_min": 0,
+            "sdk_revision": "534c707846a810e8211b93446f878dbf415f7000",
+            "transport": "serial_rs485_hesai_sdk"
+          }
+        },
+        "sources": {
+          "lidar": {
+            "age_ms": 201,
+            "clearance": {
+              "breached": true,
+              "distance_metric": "horizontal_xy",
+              "frame": "body_frd",
+              "margin_m": -0.75,
+              "nearest_distance_m": 0.75,
+              "reference": "aircraft_cg",
+              "required_distance_m": 1.5,
+              "status": "breach",
+              "violating_sector_angles_deg": [
+                0.0,
+                5.0,
+                10.0,
+                15.0,
+                20.0,
+                45.0,
+                50.0,
+                55.0,
+                60.0,
+                65.0,
+                70.0,
+                115.0,
+                120.0,
+                125.0,
+                130.0,
+                135.0,
+                140.0,
+                145.0,
+                150.0,
+                155.0,
+                160.0,
+                165.0,
+                170.0,
+                175.0,
+                180.0,
+                -175.0,
+                -170.0,
+                -165.0,
+                -160.0,
+                -155.0,
+                -150.0,
+                -145.0,
+                -140.0,
+                -135.0,
+                -130.0,
+                -125.0,
+                -90.0,
+                -85.0,
+                -80.0,
+                -50.0,
+                -45.0,
+                -40.0,
+                -35.0,
+                -30.0,
+                -15.0,
+                -10.0,
+                -5.0
+              ],
+              "violating_sector_count": 47,
+              "violating_sector_indices": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                43,
+                44,
+                45,
+                46,
+                47,
+                54,
+                55,
+                56,
+                62,
+                63,
+                64,
+                65,
+                66,
+                69,
+                70,
+                71
+              ]
+            },
+            "known_sectors": [
+              {
+                "angle_deg": 0.0,
+                "distance_m": 0.92
+              },
+              {
+                "angle_deg": 5.0,
+                "distance_m": 0.88
+              },
+              {
+                "angle_deg": 10.0,
+                "distance_m": 0.83
+              },
+              {
+                "angle_deg": 15.0,
+                "distance_m": 0.83
+              },
+              {
+                "angle_deg": 20.0,
+                "distance_m": 0.93
+              },
+              {
+                "angle_deg": 25.0,
+                "distance_m": 1.54
+              },
+              {
+                "angle_deg": 30.0,
+                "distance_m": 1.6
+              },
+              {
+                "angle_deg": 35.0,
+                "distance_m": 1.68
+              },
+              {
+                "angle_deg": 40.0,
+                "distance_m": 1.73
+              },
+              {
+                "angle_deg": 45.0,
+                "distance_m": 0.78
+              },
+              {
+                "angle_deg": 50.0,
+                "distance_m": 0.75
+              },
+              {
+                "angle_deg": 55.0,
+                "distance_m": 0.77
+              },
+              {
+                "angle_deg": 60.0,
+                "distance_m": 0.87
+              },
+              {
+                "angle_deg": 65.0,
+                "distance_m": 0.99
+              },
+              {
+                "angle_deg": 70.0,
+                "distance_m": 1.14
+              },
+              {
+                "angle_deg": 75.0,
+                "distance_m": 3.15
+              },
+              {
+                "angle_deg": 80.0,
+                "distance_m": 3.39
+              },
+              {
+                "angle_deg": 85.0,
+                "distance_m": 3.36
+              },
+              {
+                "angle_deg": 90.0,
+                "distance_m": 2.96
+              },
+              {
+                "angle_deg": 95.0,
+                "distance_m": 2.79
+              },
+              {
+                "angle_deg": 100.0,
+                "distance_m": 2.81
+              },
+              {
+                "angle_deg": 105.0,
+                "distance_m": 2.99
+              },
+              {
+                "angle_deg": 110.0,
+                "distance_m": 1.59
+              },
+              {
+                "angle_deg": 115.0,
+                "distance_m": 1.38
+              },
+              {
+                "angle_deg": 120.0,
+                "distance_m": 1.41
+              },
+              {
+                "angle_deg": 125.0,
+                "distance_m": 1.47
+              },
+              {
+                "angle_deg": 130.0,
+                "distance_m": 1.2
+              },
+              {
+                "angle_deg": 135.0,
+                "distance_m": 1.18
+              },
+              {
+                "angle_deg": 140.0,
+                "distance_m": 1.24
+              },
+              {
+                "angle_deg": 145.0,
+                "distance_m": 1.25
+              },
+              {
+                "angle_deg": 150.0,
+                "distance_m": 1.18
+              },
+              {
+                "angle_deg": 155.0,
+                "distance_m": 1.13
+              },
+              {
+                "angle_deg": 160.0,
+                "distance_m": 0.95
+              },
+              {
+                "angle_deg": 165.0,
+                "distance_m": 0.91
+              },
+              {
+                "angle_deg": 170.0,
+                "distance_m": 0.78
+              },
+              {
+                "angle_deg": 175.0,
+                "distance_m": 0.79
+              },
+              {
+                "angle_deg": 180.0,
+                "distance_m": 0.78
+              },
+              {
+                "angle_deg": -175.0,
+                "distance_m": 0.89
+              },
+              {
+                "angle_deg": -170.0,
+                "distance_m": 0.89
+              },
+              {
+                "angle_deg": -165.0,
+                "distance_m": 0.8
+              },
+              {
+                "angle_deg": -160.0,
+                "distance_m": 0.9
+              },
+              {
+                "angle_deg": -155.0,
+                "distance_m": 0.97
+              },
+              {
+                "angle_deg": -150.0,
+                "distance_m": 1.02
+              },
+              {
+                "angle_deg": -145.0,
+                "distance_m": 1.07
+              },
+              {
+                "angle_deg": -140.0,
+                "distance_m": 1.13
+              },
+              {
+                "angle_deg": -135.0,
+                "distance_m": 1.22
+              },
+              {
+                "angle_deg": -130.0,
+                "distance_m": 1.33
+              },
+              {
+                "angle_deg": -125.0,
+                "distance_m": 1.46
+              },
+              {
+                "angle_deg": -120.0,
+                "distance_m": 1.69
+              },
+              {
+                "angle_deg": -115.0,
+                "distance_m": 1.69
+              },
+              {
+                "angle_deg": -110.0,
+                "distance_m": 1.62
+              },
+              {
+                "angle_deg": -105.0,
+                "distance_m": 1.57
+              },
+              {
+                "angle_deg": -100.0,
+                "distance_m": 1.54
+              },
+              {
+                "angle_deg": -95.0,
+                "distance_m": 1.51
+              },
+              {
+                "angle_deg": -90.0,
+                "distance_m": 1.5
+              },
+              {
+                "angle_deg": -85.0,
+                "distance_m": 1.5
+              },
+              {
+                "angle_deg": -80.0,
+                "distance_m": 1.48
+              },
+              {
+                "angle_deg": -75.0,
+                "distance_m": 1.51
+              },
+              {
+                "angle_deg": -70.0,
+                "distance_m": 1.54
+              },
+              {
+                "angle_deg": -65.0,
+                "distance_m": 1.58
+              },
+              {
+                "angle_deg": -60.0,
+                "distance_m": 1.64
+              },
+              {
+                "angle_deg": -55.0,
+                "distance_m": 1.72
+              },
+              {
+                "angle_deg": -50.0,
+                "distance_m": 1.42
+              },
+              {
+                "angle_deg": -45.0,
+                "distance_m": 1.35
+              },
+              {
+                "angle_deg": -40.0,
+                "distance_m": 1.27
+              },
+              {
+                "angle_deg": -35.0,
+                "distance_m": 1.24
+              },
+              {
+                "angle_deg": -30.0,
+                "distance_m": 1.36
+              },
+              {
+                "angle_deg": -25.0,
+                "distance_m": 1.56
+              },
+              {
+                "angle_deg": -20.0,
+                "distance_m": 2.15
+              },
+              {
+                "angle_deg": -15.0,
+                "distance_m": 1.14
+              },
+              {
+                "angle_deg": -10.0,
+                "distance_m": 1.07
+              },
+              {
+                "angle_deg": -5.0,
+                "distance_m": 0.99
+              }
+            ],
+            "nearest_distance_m": 0.75,
+            "source": "lidar",
+            "valid_sector_count": 72
+          }
+        },
+        "target_check": {
+          "distance_metric": "horizontal_xy",
+          "fused": {
+            "error_m": -1.0,
+            "expected_distance_m": 2.5,
+            "measured_distance_m": 1.5,
+            "measured_sector_angle_deg": -90.0,
+            "passed": false,
+            "reference": "aircraft_cg",
+            "status": "outside_tolerance",
+            "target_angle_deg": -90.0,
+            "tolerance_m": 0.08
+          },
+          "passed": false,
+          "reference": "aircraft_cg",
+          "sources": {
+            "lidar": {
+              "error_m": -1.0,
+              "expected_distance_m": 2.5,
+              "measured_distance_m": 1.5,
+              "measured_sector_angle_deg": -90.0,
+              "passed": false,
+              "reference": "aircraft_cg",
+              "status": "outside_tolerance",
+              "target_angle_deg": -90.0,
+              "tolerance_m": 0.08
+            }
+          }
+        }
+      }
+    }
+  ],
+  "target_distance_m": 2.5,
+  "target_tolerance_m": 0.08
+}

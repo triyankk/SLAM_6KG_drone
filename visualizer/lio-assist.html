@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LIO Shadow Carry Guide</title>
+  </head>
+  <body>
+    <main class="assist-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">LIO SHADOW</p>
+          <h1 id="assistTitle">Guided carry validation</h1>
+        </div>
+        <div class="safety-lock">
+          <i data-lucide="shield-check"></i>
+          <span>POSE OUTPUT OFF</span>
+        </div>
+      </header>
+
+      <section class="phase-band" aria-live="polite">
+        <div class="phase-copy">
+          <p id="phaseKicker">WAITING FOR CLOCK LOCK</p>
+          <h2 id="phaseLabel">SYNCHRONIZING</h2>
+          <p id="phaseInstruction">
+            Keep the aircraft still while both clocks lock.
+          </p>
+        </div>
+        <div class="phase-time">
+          <strong id="phaseRemaining">--</strong>
+          <span>PHASE REMAINING</span>
+        </div>
+      </section>
+
+      <section class="timeline" aria-label="Guided test progress">
+        <div class="timeline-track">
+          <div id="timelineFill" class="timeline-fill"></div>
+        </div>
+        <div class="timeline-labels" aria-hidden="true"></div>
+      </section>
+
+      <section class="workspace">
+        <div class="plot-panel">
+          <div class="plot-heading">
+            <div>
+              <p class="eyebrow">LIO LOCAL FRAME</p>
+              <h2>Top-down trajectory</h2>
+            </div>
+            <div class="plot-legend">
+              <span><i class="legend-dot start-dot"></i>START</span>
+              <span><i class="legend-dot path-dot"></i>PATH</span>
+              <span><i class="legend-dot current-dot"></i>CURRENT</span>
+            </div>
+          </div>
+          <canvas id="pathCanvas" aria-label="Live LIO trajectory"></canvas>
+          <div class="plot-footer">
+            <span id="positionReadout">X -- / Y -- / Z --</span>
+            <span>RETURN RING 0.35 M</span>
+          </div>
+        </div>
+
+        <aside class="status-panel" aria-label="Shadow session status">
+          <section class="mission-clock">
+            <p class="eyebrow">TOTAL ELAPSED</p>
+            <strong id="missionTime">00:00</strong>
+            <span id="sessionName">SESSION STARTING</span>
+          </section>
+
+          <section class="metrics-strip">
+            <div>
+              <span id="primaryMetricLabel">DISTANCE</span>
+              <strong id="distanceValue">0.00 m</strong>
+            </div>
+            <div>
+              <span id="secondaryMetricLabel">RETURN ERROR</span>
+              <strong id="returnValue">--</strong>
+            </div>
+          </section>
+
+          <section class="sensor-list" aria-label="Live sensor health">
+            <div class="sensor-row" data-sensor="imu">
+              <i data-lucide="activity"></i>
+              <div>
+                <strong>IM10A</strong>
+                <span id="imuDetail">WAITING</span>
+              </div>
+              <i class="health-light"></i>
+            </div>
+            <div class="sensor-row" data-sensor="lidar">
+              <i data-lucide="radio"></i>
+              <div>
+                <strong>JT16</strong>
+                <span id="lidarDetail">WAITING</span>
+              </div>
+              <i class="health-light"></i>
+            </div>
+            <div class="sensor-row" data-sensor="lio">
+              <i data-lucide="locate-fixed"></i>
+              <div>
+                <strong>FAST-LIO2</strong>
+                <span id="lioDetail">WAITING</span>
+              </div>
+              <i class="health-light"></i>
+            </div>
+            <div class="sensor-row" data-sensor="cube">
+              <i data-lucide="cpu"></i>
+              <div>
+                <strong>CUBE REFERENCE</strong>
+                <span id="cubeDetail">WAITING</span>
+              </div>
+              <i class="health-light"></i>
+            </div>
+          </section>
+
+          <section class="controls">
+            <button id="restartButton" class="command-button" disabled>
+              <i data-lucide="play"></i>
+              <span>Start sequence</span>
+            </button>
+            <button
+              id="stopButton"
+              class="icon-button"
+              title="Stop shadow recording"
+              aria-label="Stop shadow recording"
+            >
+              <i data-lucide="square"></i>
+            </button>
+          </section>
+
+          <p id="connectionStatus" class="connection-status">
+            CONNECTING TO SHADOW RECORDER
+          </p>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/src/lio-assist.js"></script>
+  </body>
+</html>

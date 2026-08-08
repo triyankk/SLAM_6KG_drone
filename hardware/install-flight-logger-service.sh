@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="optflow-flight-logger.service"
 SERVICE_SOURCE="${ROOT_DIR}/hardware/systemd/${SERVICE_NAME}"
+ROUTER_NAME="optflow-mavlink-router.service"
 USER_SERVICE_DIR="${HOME}/.config/systemd/user"
 SERVICE_TARGET="${USER_SERVICE_DIR}/${SERVICE_NAME}"
 
@@ -22,6 +23,7 @@ done
 mkdir -p "${USER_SERVICE_DIR}"
 ln -sfn "${SERVICE_SOURCE}" "${SERVICE_TARGET}"
 systemctl --user daemon-reload
+systemctl --user disable --now "${ROUTER_NAME}" >/dev/null 2>&1 || true
 systemctl --user enable --now "${SERVICE_NAME}"
 
 if loginctl enable-linger "${USER}"; then
@@ -32,5 +34,8 @@ fi
 
 printf '%s\n' \
     "Installed and started ${SERVICE_NAME}." \
+    "Cube UART owner: OA-only service on /dev/ttyTHS1." \
     "Boot persistence: user lingering ${linger_result}." \
-    "Status: ./optflow flight-status"
+    "Runtime: JT16 proximity, RC7 avoidance toggle, and obstacle alerts." \
+    "SLAM, camera, pose, and companion movement output are disabled." \
+    "Status: ./optflow obstacle-status"

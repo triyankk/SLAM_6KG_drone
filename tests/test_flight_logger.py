@@ -8,6 +8,7 @@ from optflow_slam.config import load_config
 from optflow_slam.flight_analysis import analyze_session
 from optflow_slam.flight_logger import (
     FlightSession,
+    HesaiLidarRecorder,
     IdealHoldShadow,
     RawIpPcapWriter,
 )
@@ -18,6 +19,7 @@ from optflow_slam.pointcloud import (
     camera_optical_to_local,
     write_binary_ply,
 )
+from optflow_slam.slam_timing import summarize_timestamps
 
 
 def telemetry_snapshot(
@@ -181,6 +183,43 @@ def test_raw_ip_pcap_contains_udp_packet(tmp_path: Path) -> None:
     assert data.endswith(b"jt16")
 
 
+def test_jt16_bridge_protocol_preserves_slam_point_fields() -> None:
+    point_format = HesaiLidarRecorder.POINT_DTYPE
+
+    assert point_format.itemsize == 24
+    assert point_format.names == (
+        "x",
+        "y",
+        "z",
+        "timestamp",
+        "ring",
+        "intensity",
+        "confidence",
+    )
+
+
+def test_timestamp_summary_reports_rate_jitter_and_missing_samples() -> None:
+    timestamps_ns = [
+        0,
+        100_000_000,
+        200_000_000,
+        400_000_000,
+        500_000_000,
+    ]
+
+    summary = summarize_timestamps(
+        timestamps_ns,
+        units_per_second=1.0e9,
+        expected_rate_hz=10.0,
+    )
+
+    assert summary["samples"] == 5
+    assert summary["observed_rate_hz"] == 8.0
+    assert summary["estimated_drops"] == 1
+    assert summary["period_ms"]["max"] == 200.0
+    assert summary["jitter_rms_ms"] == 50.0
+
+
 def test_session_and_analysis_create_a_reusable_flight_folder(
     tmp_path: Path,
 ) -> None:
@@ -236,3 +275,105 @@ def test_session_and_analysis_create_a_reusable_flight_folder(
     assert report["stationary_hold_shadow"]["applicable_samples"] == 12
     assert (session.path / "analysis" / "report.md").exists()
     assert (session.path / "analysis" / "timeline.csv").exists()
+
+
+def test_analysis_builds_a_passive_slam_timing_gate(tmp_path: Path) -> None:
+    config_path = CONFIG_DIR / "system.yaml"
+    session = FlightSession(
+        tmp_path,
+        "slam timing",
+        load_config(config_path),
+        config_path,
+        "direct://cube-uart",
+        "direct://sensor-event-bus",
+    )
+    for index in range(5):
+        host_ns = 1_000_000_000 + index * 100_000_000
+        session.record_sensor_event(
+            {
+                "sequence": index + 1,
+                "host_monotonic_ns": host_ns,
+                "host_unix_ns": 2_000_000_000 + host_ns,
+                "source": "external_imu",
+                "type": "gyro_rads",
+                "data": {"values": [0.0, 0.0, 0.0]},
+            }
+        )
+        session.record_sensor_timing(
+            {
+                "source": "realsense_frameset",
+                "host_monotonic_ns": host_ns,
+                "host_unix_ns": 2_000_000_000 + host_ns,
+                "depth_frame_number": index,
+                "depth_sensor_timestamp_ms": index * 100.0,
+                "depth_timestamp_domain": "hardware_clock",
+                "color_frame_number": index,
+                "color_sensor_timestamp_ms": index * 100.0,
+                "color_timestamp_domain": "hardware_clock",
+            }
+        )
+        session.record_sensor_timing(
+            {
+                "source": "jt16_frame",
+                "host_receive_monotonic_ns": host_ns,
+                "host_receive_unix_ns": 2_000_000_000 + host_ns,
+                "bridge_callback_monotonic_ns": host_ns - 1_000_000,
+                "frame_index": index,
+                "point_count": 16,
+                "point_timestamp_min_s": index * 0.1,
+                "point_timestamp_max_s": index * 0.1 + 0.05,
+                "point_timestamp_span_s": 0.05,
+            }
+        )
+    session.record_sensor_timing(
+        {
+            "source": "realsense_frameset",
+            "host_monotonic_ns": 1_450_000_000,
+            "host_unix_ns": 3_450_000_000,
+            "depth_frame_number": 4,
+            "depth_sensor_timestamp_ms": 400.0,
+            "depth_timestamp_domain": "hardware_clock",
+            "color_frame_number": 4,
+            "color_sensor_timestamp_ms": 400.0,
+            "color_timestamp_domain": "hardware_clock",
+        }
+    )
+    session.close()
+
+    report_path = analyze_session(session.path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (session.path / "manifest.json").read_text(encoding="utf-8")
+    )
+    timing = report["slam_timing"]
+
+    assert manifest["rows"]["sensor_timing"] == 16
+    assert timing["d415"]["framesets"] == 6
+    assert timing["d415"]["unique_depth_frames"] == 5
+    assert timing["d415"]["repeated_depth_frames"] == 1
+    assert timing["jt16"]["frames"] == 5
+    assert timing["external_imu"]["selected_sample_type"] == "gyro_rads"
+    assert timing["external_imu"]["host_arrival"]["observed_rate_hz"] == 10.0
+    assert not timing["gates"]["ready_for_lidar_inertial_replay"]
+    assert "IM10A frames do not yet carry sensor time." in timing["blockers"]
+    assert (session.path / "analysis" / "slam_timing.json").exists()
+
+
+def test_session_lifecycle_event_is_immediately_durable(
+    tmp_path: Path,
+) -> None:
+    config_path = CONFIG_DIR / "system.yaml"
+    session = FlightSession(
+        tmp_path,
+        "durability",
+        load_config(config_path),
+        config_path,
+        "direct://cube-uart",
+        "direct://sensor-event-bus",
+    )
+
+    events = (session.path / "events.ndjson").read_text().splitlines()
+
+    assert len(events) == 1
+    assert json.loads(events[0])["event"] == "recording_started"
+    session.close(status="interrupted", reason="test_complete")

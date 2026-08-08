@@ -1,0 +1,18 @@
+{
+  "baud": 921600,
+  "endpoint": "/dev/ttyTHS1",
+  "firmware": "ArduCopter 4.6.3",
+  "parameters": {
+    "AVOID_ACCEL_MAX": 3.0,
+    "AVOID_BACKUP_SPD": 1.0,
+    "AVOID_BEHAVE": 0.0,
+    "AVOID_ENABLE": 0.0,
+    "AVOID_MARGIN": 1.5,
+    "INITIAL_MODE": 2.0,
+    "PRX1_TYPE": 0.0,
+    "RC11_OPTION": 31.0,
+    "RC7_OPTION": 0.0,
+    "SERIAL2_BAUD": null,
+    "SERIAL2_PROTOCOL": null
+  }
+}

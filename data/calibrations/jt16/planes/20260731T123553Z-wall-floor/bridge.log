@@ -1,0 +1,22 @@
+-------- Hesai Lidar SDK V2.0.12 --------
+[2026-07-31 18:05:53][INFO]logger start to run
+[2026-07-31 18:05:53][ERROR]send cmd serial open error
+[2026-07-31 18:05:53][INFO]Use thread num 1 to parse packet
+[2026-07-31 18:05:53][INFO]Lidar::ParserThread start to run
+[2026-07-31 18:05:53][INFO]Lidar::Receive Udp Thread start to run
+[2026-07-31 18:05:54][INFO]init 1_8 parser
+[2026-07-31 18:05:54][INFO]finish 0: The basic initialisation is complete
+[2026-07-31 18:05:54][WARNING]get correction error, ret:-1
+[2026-07-31 18:05:54][ERROR]---Failed to obtain correction file from lidar!---
+[2026-07-31 18:05:54][INFO]load correction file from local correction now!
+[2026-07-31 18:05:54][INFO]Parse local Correction file Success!!!
+[2026-07-31 18:05:54][INFO]finish 2: The angle calibration file is finished loading
+[2026-07-31 18:05:54][WARNING]cpu version, not support for gpu
+[2026-07-31 18:05:54][INFO]--------begin to parse udp package--------
+[2026-07-31 18:05:55][WARNING]pkt loss freq: 3603/4141
+JT16 bridge stopped after 51 frames and 1 packets
+[2026-07-31 18:06:05][INFO]Hesai Lidar SDK is stopping...
+[2026-07-31 18:06:05][INFO]Source::Close()
+[2026-07-31 18:06:05][INFO]Source::Close()
+[2026-07-31 18:06:05][INFO]release 1_8 parser
+[2026-07-31 18:06:05][INFO]release general parser

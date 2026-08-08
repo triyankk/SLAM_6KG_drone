@@ -18,14 +18,35 @@ import time
 from typing import Any
 import webbrowser
 
-from .config import ConfigError, load_config
+from .config import (
+    ConfigError,
+    ObstacleAvoidanceConfig,
+    load_config,
+)
 from .im10a import Im10aDecoder
-from .paths import CONFIG_DIR, VISUALIZER_DIR
-
+from .mavlink_compat import install_pymavlink_instance_guard
+from .obstacles import (
+    ObstacleFusion,
+    ObstacleScan,
+    obstacle_alert_state,
+)
+from .paths import CONFIG_DIR, RUNTIME_DIR, VISUALIZER_DIR
+from .runtime_lock import RuntimeLockError, cube_mavlink_lock
+from .spatial_stream import (
+    DEFAULT_SPATIAL_FRAME_DIR,
+    DemoSpatialSource,
+    HesaiSpatialSource,
+    RealSenseSpatialSource,
+    SpatialFrameFileSource,
+    SpatialFrameStore,
+)
 
 DEFAULT_STATIC_DIR = VISUALIZER_DIR / "dist"
 DEFAULT_CONFIG = CONFIG_DIR / "system.yaml"
+DEFAULT_TRAJECTORY_FILE = RUNTIME_DIR / "slam_navigation_status.json"
 TELEMETRY_STREAM_HZ = 60.0
+STARTUP_RISING_TUNE = "MFT200L16CEG"
+OBSTACLE_BEEP_TUNE = "MFT240L32G"
 
 
 def _valid_pwm(value: Any) -> int | None:
@@ -45,6 +66,153 @@ def _event_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+class NavigationTrajectoryStore:
+    """Expose the active navigator's atomic status file to the browser."""
+
+    def __init__(self, path: Path, *, demo: bool = False) -> None:
+        self.path = path
+        self.demo = bool(demo)
+
+    def snapshot(self) -> dict[str, Any]:
+        if self.demo:
+            return self._demo_snapshot()
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {
+                "kind": "trajectory",
+                "available": False,
+                "detail": "SLAM navigation status has not been created",
+                "trajectories": {},
+            }
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                "kind": "trajectory",
+                "available": False,
+                "detail": f"SLAM navigation status is unreadable: {exc}",
+                "trajectories": {},
+            }
+        if not isinstance(payload, dict):
+            return {
+                "kind": "trajectory",
+                "available": False,
+                "detail": "SLAM navigation status is not an object",
+                "trajectories": {},
+            }
+        updated_unix_ns = payload.get("updated_unix_ns")
+        try:
+            age_ms = max(
+                0.0,
+                (time.time_ns() - int(updated_unix_ns)) / 1.0e6,
+            )
+        except (TypeError, ValueError):
+            age_ms = None
+        return {
+            **payload,
+            "kind": "trajectory",
+            "available": True,
+            "live": bool(age_ms is not None and age_ms <= 1500.0),
+            "age_ms": age_ms,
+        }
+
+
+    @staticmethod
+    def _demo_snapshot() -> dict[str, Any]:
+        phase = time.monotonic() * 0.25
+        points = []
+        for index in range(160):
+            angle = index * 0.035
+            points.append(
+                [
+                    1.7 * math.sin(angle),
+                    1.1 * math.sin(angle * 0.55),
+                    0.18 + 0.08 * math.sin(angle * 0.4),
+                ]
+            )
+        offset = 0.04 * math.sin(phase)
+        rgbd = [[x, y + offset, z] for x, y, z in points]
+        return {
+            "schema_version": 1,
+            "kind": "trajectory",
+            "available": True,
+            "live": True,
+            "age_ms": 0.0,
+            "state": "returning_locked",
+            "stage": "demo",
+            "shadow_only": True,
+            "estimator": {
+                "frame_yaw_ned_rad": 0.35,
+                "pose_reason": "ready",
+                "pose_sequence": int(time.monotonic() * 5.0),
+            },
+            "trajectories": {
+                "frame": "launch_local_flu",
+                "lio": points,
+                "rgbd": rgbd,
+                "cube": points[::2],
+                "breadcrumbs": points[::8],
+                "target": points[max(0, 120 - int(phase) % 80)],
+                "launch": points[0],
+            },
+        }
+
+
+class VisualCueStore:
+    """Thread-safe, display-only instruction cue for connected browsers."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sequence = 0
+        self._message = ""
+        self._detail = ""
+        self._flash_count = 2
+        self._expires_monotonic = 0.0
+
+    def trigger(
+        self,
+        message: str,
+        *,
+        detail: str = "",
+        flash_count: int = 2,
+        duration_s: float = 10.0,
+    ) -> dict[str, Any]:
+        clean_message = str(message).strip()
+        clean_detail = str(detail).strip()
+        if not clean_message or len(clean_message) > 100:
+            raise ValueError("message must contain 1 to 100 characters")
+        if len(clean_detail) > 240:
+            raise ValueError("detail must contain at most 240 characters")
+        flashes = int(flash_count)
+        duration = float(duration_s)
+        if flashes not in (1, 2, 3):
+            raise ValueError("flash_count must be 1, 2, or 3")
+        if not math.isfinite(duration) or not 1.0 <= duration <= 30.0:
+            raise ValueError("duration_s must be between 1 and 30 seconds")
+        with self._lock:
+            self._sequence += 1
+            self._message = clean_message
+            self._detail = clean_detail
+            self._flash_count = flashes
+            self._expires_monotonic = time.monotonic() + duration
+            return self._snapshot_locked()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        remaining_s = max(0.0, self._expires_monotonic - time.monotonic())
+        return {
+            "kind": "visual_cue",
+            "sequence": self._sequence,
+            "active": remaining_s > 0.0,
+            "message": self._message,
+            "detail": self._detail,
+            "flash_count": self._flash_count,
+            "remaining_ms": round(remaining_s * 1000),
+        }
 
 
 class RawEventBus:
@@ -259,6 +427,33 @@ class TelemetryStore:
                 "time_boot_ms": None,
                 "updated_monotonic": None,
             },
+            "obstacles": {
+                "stage": "disabled",
+                "mavlink_output_enabled": False,
+                "source": None,
+                "valid_sector_count": 0,
+                "nearest_distance_m": None,
+                "clearance_reference": "aircraft_cg",
+                "clearance_distance_metric": "horizontal_xy",
+                "hard_cg_clearance_m": None,
+                "clearance_status": "unknown",
+                "clearance_margin_m": None,
+                "clearance_breached": False,
+                "violating_sector_count": 0,
+                "violating_sector_angles_deg": [],
+                "source_stale_timeout_s": None,
+                "sector_increment_deg": None,
+                "distances_cm": [],
+                "messages_sent": 0,
+                "rc_toggle_channel": None,
+                "rc_toggle_pwm": None,
+                "rc_toggle_enabled": False,
+                "alert_zone": "inactive",
+                "alert_beep_rate_hz": 0.0,
+                "alert_beeps_sent": 0,
+                "startup_tune_sent": False,
+                "updated_monotonic": None,
+            },
             "ros_imu": {
                 "connected": False,
                 "detail": "Waiting for IM10A",
@@ -371,6 +566,7 @@ class TelemetryStore:
             "rc",
             "actuators",
             "position_target",
+            "obstacles",
         ):
             state[section]["age_ms"] = age_ms(
                 state[section].pop("updated_monotonic")
@@ -416,8 +612,17 @@ def _set_message_interval(
     return int(acknowledgement.result)
 
 
+def _restore_message_intervals(master, message_ids) -> None:
+    for message_id in message_ids:
+        try:
+            # Zero restores the stream default; -1 disables it.
+            _set_message_interval(master, message_id, 0)
+        except Exception:
+            pass
+
+
 class MavlinkSource(threading.Thread):
-    """Reconnectable, read-only telemetry source for the Cube UART."""
+    """Reconnectable Cube UART owner with latest-only proximity output."""
 
     def __init__(
         self,
@@ -425,19 +630,219 @@ class MavlinkSource(threading.Thread):
         stop_event: threading.Event,
         endpoint: str,
         baud: int,
+        *,
+        source_system: int = 1,
+        source_component: int = 191,
+        obstacle_max_age_s: float = 0.25,
+        obstacle_output_enabled: bool = True,
+        obstacle_settings: ObstacleAvoidanceConfig | None = None,
+        startup_tune_enabled: bool = False,
     ) -> None:
         super().__init__(name="cube-mavlink", daemon=True)
         self.store = store
         self.stop_event = stop_event
         self.endpoint = endpoint
         self.baud = baud
+        self.source_system = source_system
+        self.source_component = source_component
         self.target_system: int | None = None
         self.target_component: int | None = None
         self._last_highres_imu_monotonic: float | None = None
+        self._outgoing_lock = threading.Lock()
+        self._pending_obstacle: ObstacleScan | None = None
+        self._latest_obstacle: ObstacleScan | None = None
+        self._obstacle_max_age_ns = round(obstacle_max_age_s * 1.0e9)
+        self._obstacle_messages_sent = 0
+        self._obstacle_output_enabled = obstacle_output_enabled
+        self._obstacle_settings = obstacle_settings
+        self._startup_tune_enabled = startup_tune_enabled
+        self._startup_tune_sent = False
+        self._armed = False
+        self._rc_toggle_enabled = False
+        self._rc_toggle_pwm: int | None = None
+        self._last_obstacle_beep_s = float("-inf")
+        self._obstacle_beeps_sent = 0
+
+    def queue_obstacle_scan(self, scan: ObstacleScan) -> None:
+        """Replace any unsent scan so stale data can never form a backlog."""
+
+        with self._outgoing_lock:
+            self._pending_obstacle = scan
+            self._latest_obstacle = scan
+
+    def _send_pending_obstacle(self, master, mavutil) -> bool:
+        with self._outgoing_lock:
+            scan = self._pending_obstacle
+            self._pending_obstacle = None
+        if scan is None or not self._obstacle_output_enabled:
+            return False
+
+        age_ns = time.monotonic_ns() - scan.monotonic_ns
+        if age_ns < 0 or age_ns > self._obstacle_max_age_ns:
+            return False
+        original_component = getattr(master.mav, "srcComponent", None)
+        master.mav.srcComponent = getattr(
+            mavutil.mavlink,
+            "MAV_COMP_ID_OBSTACLE_AVOIDANCE",
+            196,
+        )
+        try:
+            master.mav.obstacle_distance_send(
+                scan.monotonic_ns // 1000,
+                mavutil.mavlink.MAV_DISTANCE_SENSOR_LASER,
+                list(scan.distances_cm),
+                round(scan.increment_deg),
+                scan.min_distance_cm,
+                scan.max_distance_cm,
+                increment_f=scan.increment_deg,
+                angle_offset=0.0,
+                frame=mavutil.mavlink.MAV_FRAME_BODY_FRD,
+            )
+        finally:
+            if original_component is None:
+                del master.mav.srcComponent
+            else:
+                master.mav.srcComponent = original_component
+        self._obstacle_messages_sent += 1
+        self.store.update(
+            "obstacles", messages_sent=self._obstacle_messages_sent
+        )
+        return True
+
+    def _play_tune(self, master, tune: str) -> bool:
+        target_system = self.target_system or 1
+        target_component = self.target_component or 1
+        try:
+            master.mav.play_tune_send(
+                target_system,
+                target_component,
+                tune.encode("ascii"),
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+        return True
+
+    def _maybe_send_startup_tune(self, master) -> bool:
+        if (
+            not self._startup_tune_enabled
+            or self._startup_tune_sent
+            or not self._play_tune(master, STARTUP_RISING_TUNE)
+        ):
+            return False
+        self._startup_tune_sent = True
+        self.store.update("obstacles", startup_tune_sent=True)
+        self.store.publish_raw(
+            "companion",
+            "STARTUP_TUNE",
+            {"tune": STARTUP_RISING_TUNE},
+        )
+        return True
+
+    def _set_rc_toggle_pwm(self, pwm: int | None) -> None:
+        settings = self._obstacle_settings
+        if settings is None:
+            return
+        previous = self._rc_toggle_enabled
+        self._rc_toggle_pwm = pwm
+        if pwm is not None:
+            if pwm >= settings.rc_toggle.engage_pwm:
+                self._rc_toggle_enabled = True
+            elif pwm <= settings.rc_toggle.disengage_pwm:
+                self._rc_toggle_enabled = False
+        if previous != self._rc_toggle_enabled:
+            self._last_obstacle_beep_s = float("-inf")
+            self.store.publish_raw(
+                "obstacle_alert",
+                "RC_TOGGLE",
+                {
+                    "channel": settings.rc_toggle.channel,
+                    "pwm": pwm,
+                    "enabled": self._rc_toggle_enabled,
+                },
+            )
+        self.store.update(
+            "obstacles",
+            rc_toggle_channel=settings.rc_toggle.channel,
+            rc_toggle_pwm=pwm,
+            rc_toggle_enabled=self._rc_toggle_enabled,
+        )
+
+    def _maybe_send_obstacle_beep(self, master) -> bool:
+        settings = self._obstacle_settings
+        if settings is None:
+            return False
+        now_ns = time.monotonic_ns()
+        now_s = now_ns / 1.0e9
+        with self._outgoing_lock:
+            scan = self._latest_obstacle
+        fresh = (
+            scan is not None
+            and 0 <= now_ns - scan.monotonic_ns <= self._obstacle_max_age_ns
+        )
+        distance_m = scan.nearest_distance_m if fresh and scan else None
+        alert = obstacle_alert_state(
+            distance_m,
+            hard_clearance_m=settings.hard_cg_clearance_m,
+            full_rate_distance_m=max(
+                settings.min_distance_m,
+                settings.airframe_radius_m,
+            ),
+            settings=settings.alerts,
+        )
+        audible = (
+            fresh
+            and settings.alerts.enabled
+            and self._rc_toggle_enabled
+            and (
+                self._armed
+                or not settings.alerts.only_when_armed
+            )
+        )
+        effective_rate_hz = alert.beep_rate_hz if audible else 0.0
+        self.store.update(
+            "obstacles",
+            alert_zone=alert.zone if fresh else "stale",
+            alert_beep_rate_hz=round(effective_rate_hz, 3),
+            rc_toggle_channel=settings.rc_toggle.channel,
+            rc_toggle_pwm=self._rc_toggle_pwm,
+            rc_toggle_enabled=self._rc_toggle_enabled,
+        )
+        if effective_rate_hz <= 0.0:
+            return False
+        interval_s = 1.0 / effective_rate_hz
+        if now_s - self._last_obstacle_beep_s < interval_s:
+            return False
+        if not self._play_tune(master, OBSTACLE_BEEP_TUNE):
+            return False
+        self._last_obstacle_beep_s = now_s
+        self._obstacle_beeps_sent += 1
+        self.store.update(
+            "obstacles",
+            alert_beeps_sent=self._obstacle_beeps_sent,
+        )
+        self.store.publish_raw(
+            "obstacle_alert",
+            "BEEP",
+            {
+                "zone": alert.zone,
+                "distance_m": distance_m,
+                "beep_rate_hz": effective_rate_hz,
+                "avoidance_required": alert.avoidance_required,
+            },
+        )
+        return True
 
     def run(self) -> None:
         try:
+            with cube_mavlink_lock("standalone hardware visualizer"):
+                self._run_locked()
+        except RuntimeLockError as exc:
+            self.store.set_link(False, str(exc))
+
+    def _run_locked(self) -> None:
+        try:
             from pymavlink import mavutil
+            install_pymavlink_instance_guard(mavutil)
         except ImportError as exc:
             self.store.set_link(False, f"pymavlink unavailable: {exc}")
             return
@@ -480,8 +885,8 @@ class MavlinkSource(threading.Thread):
                 master = mavutil.mavlink_connection(
                     self.endpoint,
                     baud=self.baud,
-                    source_system=1,
-                    source_component=191,
+                    source_system=self.source_system,
+                    source_component=self.source_component,
                 )
                 heartbeat = self._wait_for_heartbeat(master, mavutil)
                 if heartbeat is None:
@@ -495,6 +900,7 @@ class MavlinkSource(threading.Thread):
                 # observed flight-controller component above.
                 master.target_component = 0
                 self._handle_heartbeat(heartbeat, mavutil)
+                self._maybe_send_startup_tune(master)
                 master.mav.request_data_stream_send(
                     master.target_system,
                     master.target_component,
@@ -522,7 +928,9 @@ class MavlinkSource(threading.Thread):
                 intervals_requested = True
 
                 while not self.stop_event.is_set():
-                    message = master.recv_match(blocking=True, timeout=0.5)
+                    self._send_pending_obstacle(master, mavutil)
+                    self._maybe_send_obstacle_beep(master)
+                    message = master.recv_match(blocking=True, timeout=0.05)
                     if message is None:
                         snapshot = self.store.snapshot()
                         age = snapshot["link"]["age_ms"]
@@ -552,11 +960,9 @@ class MavlinkSource(threading.Thread):
             finally:
                 if master is not None:
                     if intervals_requested:
-                        for message_id in message_intervals:
-                            try:
-                                _set_message_interval(master, message_id, -1)
-                            except Exception:
-                                pass
+                        _restore_message_intervals(
+                            master, message_intervals
+                        )
                     try:
                         master.close()
                     except Exception:
@@ -573,6 +979,8 @@ class MavlinkSource(threading.Thread):
             if (
                 message.autopilot
                 == mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA
+                and message.get_srcComponent()
+                == mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
             ):
                 return message
         return None
@@ -582,6 +990,9 @@ class MavlinkSource(threading.Thread):
             message.base_mode
             & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
         )
+        if self._armed and not armed:
+            self._last_obstacle_beep_s = float("-inf")
+        self._armed = armed
         self.store.update(
             "vehicle",
             system_id=message.get_srcSystem(),
@@ -805,6 +1216,10 @@ class MavlinkSource(threading.Thread):
                 time_boot_ms=int(message.time_boot_ms),
                 updated_monotonic=now,
             )
+            settings = self._obstacle_settings
+            if settings is not None:
+                channel_index = settings.rc_toggle.channel - 1
+                self._set_rc_toggle_pwm(channels[channel_index])
         elif message_type == "SERVO_OUTPUT_RAW":
             outputs = [
                 _valid_pwm(getattr(message, f"servo{index}_raw", 0))
@@ -886,19 +1301,23 @@ class Im10aSource(threading.Thread):
                 )
                 port.reset_input_buffer()
                 decoder = Im10aDecoder()
-                quaternion_frames = 0
+                rate_frames = 0
                 rate_started = time.monotonic()
+                current_sensor_time_s: float | None = None
                 while not self.stop_event.is_set():
                     data = port.read(max(1, port.in_waiting))
                     if not data:
                         continue
                     for measurement in decoder.feed(data):
                         now = time.monotonic()
+                        if measurement.kind == "sensor_time":
+                            current_sensor_time_s = measurement.sensor_time_s
                         self.store.publish_raw(
                             "external_imu",
                             measurement.kind,
                             {
                                 "values": list(measurement.values),
+                                "sensor_time_s": current_sensor_time_s,
                                 "checksum_errors": decoder.checksum_errors,
                             },
                         )
@@ -919,12 +1338,25 @@ class Im10aSource(threading.Thread):
                             )
                         elif measurement.kind == "gyro_rads":
                             x, y, z = measurement.values
+                            rate_frames += 1
+                            elapsed = now - rate_started
+                            rate_hz = 0.0
+                            if elapsed >= 1.0:
+                                rate_hz = rate_frames / elapsed
+                                rate_frames = 0
+                                rate_started = now
+                            values: dict[str, Any] = {
+                                **common,
+                                "gyro_x_rads": x,
+                                "gyro_y_rads": y,
+                                "gyro_z_rads": z,
+                                "sensor_time_s": current_sensor_time_s,
+                            }
+                            if rate_hz > 0.0:
+                                values["sample_rate_hz"] = rate_hz
                             self.store.update(
                                 "ros_imu",
-                                **common,
-                                gyro_x_rads=x,
-                                gyro_y_rads=y,
-                                gyro_z_rads=z,
+                                **values,
                             )
                         elif measurement.kind == "euler_rad":
                             roll, pitch, yaw = measurement.values
@@ -936,19 +1368,10 @@ class Im10aSource(threading.Thread):
                                 yaw_rad=yaw,
                             )
                         elif measurement.kind == "quaternion_wxyz":
-                            quaternion_frames += 1
-                            elapsed = now - rate_started
-                            rate_hz = 0.0
-                            if elapsed >= 1.0:
-                                rate_hz = quaternion_frames / elapsed
-                                quaternion_frames = 0
-                                rate_started = now
                             values: dict[str, Any] = {
                                 **common,
                                 "quaternion_wxyz": list(measurement.values),
                             }
-                            if rate_hz > 0:
-                                values["sample_rate_hz"] = rate_hz
                             self.store.update("ros_imu", **values)
             except (OSError, serial.SerialException, ValueError) as exc:
                 self.store.update(
@@ -960,6 +1383,137 @@ class Im10aSource(threading.Thread):
             finally:
                 if port is not None:
                     port.close()
+
+
+class NavigationRuntimeSource(threading.Thread):
+    """Mirror navigator status without opening any flight hardware."""
+
+    def __init__(
+        self,
+        store: TelemetryStore,
+        trajectory_store: NavigationTrajectoryStore,
+        stop_event: threading.Event,
+    ) -> None:
+        super().__init__(name="navigation-runtime-source", daemon=True)
+        self.store = store
+        self.trajectory_store = trajectory_store
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            payload = self.trajectory_store.snapshot()
+            if not payload.get("available") or not payload.get("live"):
+                self.store.set_link(
+                    False,
+                    str(payload.get("detail") or "SLAM runtime is offline"),
+                )
+                self.stop_event.wait(0.20)
+                continue
+            now = time.monotonic()
+            cube = payload.get("cube", {})
+            estimator = payload.get("estimator", {})
+            obstacles = payload.get("obstacles", {})
+            self.store.update(
+                "link",
+                connected=True,
+                detail="SLAM navigation runtime",
+                last_packet_monotonic=now,
+            )
+            self.store.update(
+                "vehicle",
+                armed=bool(cube.get("armed")),
+                mode=str(cube.get("mode") or "UNKNOWN"),
+            )
+            if all(
+                isinstance(cube.get(key), (int, float))
+                for key in ("roll_rad", "pitch_rad", "yaw_rad")
+            ):
+                self.store.update(
+                    "attitude",
+                    roll_rad=float(cube["roll_rad"]),
+                    pitch_rad=float(cube["pitch_rad"]),
+                    yaw_rad=float(cube["yaw_rad"]),
+                    updated_monotonic=now,
+                )
+            monitor_flu = estimator.get("monitor_position_local_flu_m")
+            monitor_age_ms = estimator.get("monitor_pose_age_ms")
+            local_flu = (
+                monitor_flu
+                if isinstance(monitor_flu, list)
+                and len(monitor_flu) == 3
+                and isinstance(monitor_age_ms, (int, float))
+                and 0.0 <= float(monitor_age_ms) <= 1000.0
+                else estimator.get("position_local_flu_m")
+            )
+            if isinstance(local_flu, list) and len(local_flu) == 3:
+                self.store.update(
+                    "local_position",
+                    x_m=float(local_flu[0]),
+                    y_m=-float(local_flu[1]),
+                    z_down_m=-float(local_flu[2]),
+                    source=(
+                        "lio_monitor"
+                        if local_flu is monitor_flu
+                        else "lio_guarded"
+                    ),
+                    updated_monotonic=now,
+                )
+            else:
+                local_ned = cube.get("local_position_ned_m")
+                if isinstance(local_ned, list) and len(local_ned) == 3:
+                    self.store.update(
+                        "local_position",
+                        x_m=float(local_ned[0]),
+                        y_m=float(local_ned[1]),
+                        z_down_m=float(local_ned[2]),
+                        updated_monotonic=now,
+                    )
+            flow_quality = cube.get("flow_quality")
+            if isinstance(flow_quality, (int, float)):
+                self.store.update(
+                    "flow",
+                    quality=int(flow_quality),
+                    updated_monotonic=now,
+                )
+            distance_m = cube.get("downward_range_m")
+            if isinstance(distance_m, (int, float)):
+                self.store.update(
+                    "range",
+                    distance_m=float(distance_m),
+                    updated_monotonic=now,
+                )
+            voltage_v = cube.get("battery_voltage_v")
+            if isinstance(voltage_v, (int, float)):
+                self.store.update(
+                    "power",
+                    source="SLAM_RUNTIME",
+                    voltage_v=float(voltage_v),
+                    updated_monotonic=now,
+                )
+            nearest_m = obstacles.get("nearest_distance_m")
+            breached = bool(obstacles.get("clearance_breached"))
+            hard_clearance_m = obstacles.get("hard_clearance_m")
+            self.store.update(
+                "obstacles",
+                stage=str(payload.get("stage") or "unknown"),
+                source="slam_runtime",
+                nearest_distance_m=nearest_m,
+                hard_cg_clearance_m=hard_clearance_m,
+                clearance_status=(
+                    "unknown"
+                    if nearest_m is None
+                    else "breach" if breached else "clear"
+                ),
+                clearance_margin_m=(
+                    None
+                    if not isinstance(nearest_m, (int, float))
+                    or not isinstance(hard_clearance_m, (int, float))
+                    else float(nearest_m) - float(hard_clearance_m)
+                ),
+                clearance_breached=breached,
+                updated_monotonic=now,
+            )
+            self.stop_event.wait(0.05)
 
 
 class DemoSource(threading.Thread):
@@ -1017,6 +1571,17 @@ class DemoSource(threading.Thread):
                 updated_monotonic=now,
             )
             self.store.update(
+                "local_position",
+                x_m=1.25 * math.sin(phase * 0.13),
+                y_m=0.85 * math.cos(phase * 0.11),
+                z_down_m=-distance,
+                vx_mps=0.1625 * math.cos(phase * 0.13),
+                vy_mps=-0.0935 * math.sin(phase * 0.11),
+                vz_mps=-0.0506 * math.cos(phase * 0.23),
+                time_boot_ms=round(phase * 1000),
+                updated_monotonic=now,
+            )
+            self.store.update(
                 "imu",
                 accel_x_mss=0.42 * math.sin(phase * 0.8),
                 accel_y_mss=0.31 * math.cos(phase * 0.67),
@@ -1047,7 +1612,11 @@ class DemoSource(threading.Thread):
 
 
 def make_handler(
-    store: TelemetryStore, static_dir: Path
+    store: TelemetryStore,
+    static_dir: Path,
+    spatial_store: SpatialFrameStore | None = None,
+    trajectory_store: NavigationTrajectoryStore | None = None,
+    cue_store: VisualCueStore | None = None,
 ) -> type[SimpleHTTPRequestHandler]:
     class VisualizerHandler(SimpleHTTPRequestHandler):
         server_version = "OptFlowVisualizer/0.1"
@@ -1065,10 +1634,66 @@ def make_handler(
             if self.path == "/api/events":
                 self._send_raw_event_stream()
                 return
+            if self.path == "/api/spatial":
+                self._send_spatial_stream()
+                return
+            if self.path == "/api/trajectory":
+                self._send_trajectory_stream()
+                return
+            if self.path == "/api/cue":
+                self._send_visual_cue_stream()
+                return
             if self.path == "/healthz":
-                self._send_json({"ok": True})
+                self._send_json(
+                    {
+                        "ok": True,
+                        "spatial": (
+                            None
+                            if spatial_store is None
+                            else spatial_store.snapshot()
+                        ),
+                        "trajectory": (
+                            None
+                            if trajectory_store is None
+                            else trajectory_store.snapshot()
+                        ),
+                        "cue": (
+                            None if cue_store is None else cue_store.snapshot()
+                        ),
+                    }
+                )
                 return
             super().do_GET()
+
+        def do_POST(self) -> None:
+            if self.path != "/api/cue":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            if cue_store is None:
+                self._send_json(
+                    {"error": "visual cue channel is unavailable"},
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                if not 1 <= content_length <= 4096:
+                    raise ValueError("request body must contain 1 to 4096 bytes")
+                payload = json.loads(self.rfile.read(content_length))
+                if not isinstance(payload, dict):
+                    raise ValueError("request body must be a JSON object")
+                cue = cue_store.trigger(
+                    payload.get("message", ""),
+                    detail=payload.get("detail", ""),
+                    flash_count=payload.get("flash_count", 2),
+                    duration_s=payload.get("duration_s", 10.0),
+                )
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self._send_json(
+                    {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST
+                )
+                return
+            self._send_json(cue, status=HTTPStatus.ACCEPTED)
 
         def end_headers(self) -> None:
             if self.path.startswith("/api/"):
@@ -1079,13 +1704,21 @@ def make_handler(
             if self.path not in (
                 "/api/stream",
                 "/api/events",
+                "/api/spatial",
+                "/api/trajectory",
+                "/api/cue",
                 "/api/snapshot",
             ):
                 super().log_message(format, *args)
 
-        def _send_json(self, payload: dict[str, Any]) -> None:
+        def _send_json(
+            self,
+            payload: dict[str, Any],
+            *,
+            status: HTTPStatus = HTTPStatus.OK,
+        ) -> None:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -1108,6 +1741,123 @@ def make_handler(
                     self.wfile.write(f"data:{payload}\n\n".encode("utf-8"))
                     self.wfile.flush()
                     time.sleep(1.0 / TELEMETRY_STREAM_HZ)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _send_spatial_stream(self) -> None:
+            self.connection.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+            )
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            if spatial_store is None:
+                payload = json.dumps(
+                    {
+                        "kind": "snapshot",
+                        "sequence": 0,
+                        "sources": {},
+                        "disabled": True,
+                    },
+                    separators=(",", ":"),
+                )
+                try:
+                    self.wfile.write(
+                        f"data:{payload}\n\n".encode("utf-8")
+                    )
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+
+            sequence = spatial_store.latest_sequence()
+            initial = json.dumps(
+                spatial_store.snapshot(), separators=(",", ":")
+            )
+            try:
+                self.wfile.write(
+                    f"data:{initial}\n\n".encode("utf-8")
+                )
+                self.wfile.flush()
+                while True:
+                    events, dropped = spatial_store.wait_after(sequence)
+                    if not events:
+                        self.wfile.write(b":keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    for index, event in enumerate(events):
+                        payload = dict(event)
+                        if index == 0 and dropped:
+                            payload["dropped_before"] = dropped
+                        encoded = json.dumps(
+                            payload, separators=(",", ":")
+                        )
+                        self.wfile.write(
+                            f"data:{encoded}\n\n".encode("utf-8")
+                        )
+                        sequence = int(event["sequence"])
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _send_trajectory_stream(self) -> None:
+            self.connection.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+            )
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                while True:
+                    payload = (
+                        {
+                            "kind": "trajectory",
+                            "available": False,
+                            "detail": "trajectory monitor disabled",
+                            "trajectories": {},
+                        }
+                        if trajectory_store is None
+                        else trajectory_store.snapshot()
+                    )
+                    encoded = json.dumps(payload, separators=(",", ":"))
+                    self.wfile.write(
+                        f"data:{encoded}\n\n".encode("utf-8")
+                    )
+                    self.wfile.flush()
+                    time.sleep(0.2)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _send_visual_cue_stream(self) -> None:
+            self.connection.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+            )
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                while True:
+                    payload = (
+                        {
+                            "kind": "visual_cue",
+                            "sequence": 0,
+                            "active": False,
+                        }
+                        if cue_store is None
+                        else cue_store.snapshot()
+                    )
+                    encoded = json.dumps(payload, separators=(",", ":"))
+                    self.wfile.write(
+                        f"data:{encoded}\n\n".encode("utf-8")
+                    )
+                    self.wfile.flush()
+                    time.sleep(0.2)
             except (BrokenPipeError, ConnectionResetError):
                 return
 
@@ -1156,6 +1906,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--external-imu")
     parser.add_argument("--external-imu-baud", type=int)
     parser.add_argument("--no-external-imu", action="store_true")
+    parser.add_argument("--no-spatial", action="store_true")
+    parser.add_argument("--no-depth-cloud", action="store_true")
+    parser.add_argument("--no-lidar-cloud", action="store_true")
+    parser.add_argument(
+        "--trajectory-file",
+        type=Path,
+        default=DEFAULT_TRAJECTORY_FILE,
+        help="Atomic status file written by the SLAM return runtime",
+    )
+    parser.add_argument(
+        "--trajectory-monitor",
+        action="store_true",
+        help="display the live SLAM runtime without opening hardware devices",
+    )
+    parser.add_argument(
+        "--spatial-frame-dir",
+        type=Path,
+        default=DEFAULT_SPATIAL_FRAME_DIR,
+        help="atomic D415/JT16 frames shared by the SLAM runtime",
+    )
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--static-dir", type=Path, default=DEFAULT_STATIC_DIR)
@@ -1169,6 +1939,9 @@ def main() -> int:
     except (ConfigError, OSError) as exc:
         print(f"Configuration error: {exc}")
         return 2
+    if args.demo and args.trajectory_monitor:
+        print("--demo and --trajectory-monitor are mutually exclusive")
+        return 2
     static_dir = args.static_dir.resolve()
     if not (static_dir / "index.html").exists():
         print(
@@ -1178,9 +1951,19 @@ def main() -> int:
         return 2
 
     stop_event = threading.Event()
+    spatial_store = SpatialFrameStore()
+    trajectory_store = NavigationTrajectoryStore(
+        args.trajectory_file,
+        demo=args.demo,
+    )
+    cue_store = VisualCueStore()
     mount = config.flight_controller.cube_mount
     store = TelemetryStore(
-        "demo" if args.demo else "cube_uart",
+        (
+            "demo"
+            if args.demo
+            else "slam_runtime" if args.trajectory_monitor else "cube_uart"
+        ),
         cube_mount={
             "x_m": mount.x_m,
             "y_m": mount.y_m,
@@ -1199,8 +1982,80 @@ def main() -> int:
             config.external_imu.axis_map_verification
         ),
     )
-    if args.demo:
-        sources: list[threading.Thread] = [DemoSource(store, stop_event)]
+    obstacle_settings = config.obstacle_avoidance
+    store.update(
+        "obstacles",
+        stage=obstacle_settings.stage,
+        mavlink_output_enabled=False,
+        clearance_reference="aircraft_cg",
+        clearance_distance_metric="horizontal_xy",
+        hard_cg_clearance_m=(
+            obstacle_settings.hard_cg_clearance_m
+        ),
+        source_stale_timeout_s=(
+            obstacle_settings.source_stale_timeout_s
+        ),
+        clearance_status="unknown",
+        sector_increment_deg=(
+            obstacle_settings.sector_increment_deg
+        ),
+    )
+    obstacle_fusion = ObstacleFusion(obstacle_settings)
+
+    def receive_obstacle_scan(scan: ObstacleScan) -> None:
+        obstacle_fusion.update(scan)
+        fused = obstacle_fusion.fused(monotonic_ns=scan.monotonic_ns)
+        if fused is None:
+            return
+        clearance = fused.assess_clearance(
+            obstacle_settings.hard_cg_clearance_m
+        )
+        store.update(
+            "obstacles",
+            source=fused.source,
+            valid_sector_count=fused.valid_sector_count,
+            nearest_distance_m=fused.nearest_distance_m,
+            clearance_status=clearance.status,
+            clearance_margin_m=clearance.margin_m,
+            clearance_breached=clearance.breached,
+            violating_sector_count=(
+                clearance.violating_sector_count
+            ),
+            violating_sector_angles_deg=list(
+                clearance.violating_sector_angles_deg
+            ),
+            sector_increment_deg=fused.increment_deg,
+            distances_cm=list(fused.distances_cm),
+            updated_monotonic=time.monotonic(),
+        )
+        store.publish_raw(
+            "obstacle_fusion",
+            "CG_CLEARANCE_SHADOW",
+            {
+                "source": fused.source,
+                "clearance": clearance.as_dict(),
+                "mavlink_output_enabled": False,
+            },
+        )
+
+    if args.trajectory_monitor:
+        sources = [
+            NavigationRuntimeSource(
+                store,
+                trajectory_store,
+                stop_event,
+            ),
+            SpatialFrameFileSource(
+                spatial_store,
+                stop_event,
+                args.spatial_frame_dir,
+            ),
+        ]
+    elif args.demo:
+        sources: list[threading.Thread] = [
+            DemoSource(store, stop_event),
+            DemoSpatialSource(spatial_store, store, stop_event),
+        ]
     else:
         sources = [
             MavlinkSource(
@@ -1208,6 +2063,12 @@ def main() -> int:
                 stop_event,
                 endpoint=args.serial or config.flight_controller.endpoint,
                 baud=args.baud or config.flight_controller.baud,
+                source_system=(
+                    config.flight_controller.companion_system_id
+                ),
+                source_component=(
+                    config.flight_controller.companion_component_id
+                ),
             )
         ]
         if not args.no_external_imu:
@@ -1221,10 +2082,46 @@ def main() -> int:
                     or config.external_imu.baud,
                 )
             )
+        if not args.no_spatial and not args.no_depth_cloud:
+            sources.append(
+                RealSenseSpatialSource(
+                    spatial_store,
+                    stop_event,
+                    config,
+                    obstacle_sink=receive_obstacle_scan,
+                )
+            )
+        else:
+            spatial_store.publish_status(
+                "depth_camera",
+                connected=False,
+                detail="D415 spatial stream disabled",
+            )
+        if not args.no_spatial and not args.no_lidar_cloud:
+            sources.append(
+                HesaiSpatialSource(
+                    spatial_store,
+                    stop_event,
+                    config,
+                    obstacle_sink=receive_obstacle_scan,
+                )
+            )
+        else:
+            spatial_store.publish_status(
+                "lidar",
+                connected=False,
+                detail="JT16 spatial stream disabled",
+            )
     for source in sources:
         source.start()
 
-    handler = make_handler(store, static_dir)
+    handler = make_handler(
+        store,
+        static_dir,
+        spatial_store,
+        trajectory_store,
+        cue_store,
+    )
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.daemon_threads = True
 

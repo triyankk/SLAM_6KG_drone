@@ -1,16 +1,70 @@
+import json
 import time
+from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 
+from optflow_slam.config import load_config
+from optflow_slam.obstacles import ObstacleScan, UNKNOWN_DISTANCE_CM
 from optflow_slam.visualizer_server import (
     Im10aSource,
     MavlinkSource,
+    NavigationTrajectoryStore,
+    OBSTACLE_BEEP_TUNE,
     RawEventBus,
+    STARTUP_RISING_TUNE,
     TELEMETRY_STREAM_HZ,
     TelemetryStore,
+    VisualCueStore,
     _event_safe,
+    _restore_message_intervals,
     _set_message_interval,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_visual_cue_store_sequences_display_only_instructions() -> None:
+    store = VisualCueStore()
+
+    first = store.trigger(
+        "MOVE DRONE NOW",
+        detail="Translate slowly and keep yaw steady.",
+        flash_count=2,
+        duration_s=10.0,
+    )
+    second = store.trigger("HOLD STILL", duration_s=5.0)
+
+    assert first["active"]
+    assert first["sequence"] == 1
+    assert first["flash_count"] == 2
+    assert second["sequence"] == 2
+    assert store.snapshot()["message"] == "HOLD STILL"
+
+
+def test_navigation_trajectory_store_exposes_atomic_runtime_status(
+    tmp_path: Path,
+) -> None:
+    status_path = tmp_path / "slam_navigation_status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "updated_unix_ns": time.time_ns(),
+                "state": "recording_outbound",
+                "trajectories": {"lio": [[0.0, 0.0, 0.0]]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = NavigationTrajectoryStore(status_path).snapshot()
+
+    assert snapshot["available"]
+    assert snapshot["live"]
+    assert snapshot["kind"] == "trajectory"
+    assert snapshot["state"] == "recording_outbound"
+    assert snapshot["trajectories"]["lio"] == [[0.0, 0.0, 0.0]]
 
 
 def test_telemetry_snapshot_reports_freshness() -> None:
@@ -31,6 +85,8 @@ def test_telemetry_snapshot_reports_freshness() -> None:
     assert snapshot["flow"]["rate_x_rads"] == 0.2
     assert snapshot["flow"]["age_ms"] is not None
     assert snapshot["flow"]["age_ms"] < 100
+    assert snapshot["obstacles"]["clearance_reference"] == "aircraft_cg"
+    assert snapshot["obstacles"]["clearance_status"] == "unknown"
 
 
 def test_link_state_is_explicit() -> None:
@@ -41,6 +97,173 @@ def test_link_state_is_explicit() -> None:
 
     assert not snapshot["link"]["connected"]
     assert snapshot["link"]["detail"] == "serial unavailable"
+
+
+def test_mavlink_source_sends_only_the_latest_fresh_obstacle_scan() -> None:
+    calls = []
+    components = []
+    master = SimpleNamespace(
+        mav=SimpleNamespace(
+            obstacle_distance_send=lambda *args, **kwargs: (
+                calls.append((args, kwargs)),
+                components.append(master.mav.srcComponent),
+            )
+        )
+    )
+    mavutil = SimpleNamespace(
+        mavlink=SimpleNamespace(
+            MAV_DISTANCE_SENSOR_LASER=0,
+            MAV_FRAME_BODY_FRD=12,
+            MAV_COMP_ID_OBSTACLE_AVOIDANCE=196,
+        )
+    )
+    source = MavlinkSource(
+        TelemetryStore("test"),
+        Event(),
+        "/dev/null",
+        921600,
+        obstacle_max_age_s=0.25,
+    )
+    distances = [UNKNOWN_DISTANCE_CM] * 72
+    distances[0] = 200
+    older = ObstacleScan(
+        source="depth",
+        monotonic_ns=time.monotonic_ns(),
+        distances_cm=tuple(distances),
+        increment_deg=5.0,
+        min_distance_cm=30,
+        max_distance_cm=800,
+    )
+    distances[0] = 150
+    latest = ObstacleScan(
+        source="depth+lidar",
+        monotonic_ns=time.monotonic_ns(),
+        distances_cm=tuple(distances),
+        increment_deg=5.0,
+        min_distance_cm=30,
+        max_distance_cm=800,
+    )
+
+    source.queue_obstacle_scan(older)
+    source.queue_obstacle_scan(latest)
+
+    assert source._send_pending_obstacle(master, mavutil)
+    assert not source._send_pending_obstacle(master, mavutil)
+    assert len(calls) == 1
+    assert components == [196]
+    assert not hasattr(master.mav, "srcComponent")
+    args, kwargs = calls[0]
+    assert args[2][0] == 150
+    assert args[3:6] == (5, 30, 800)
+    assert kwargs == {
+        "increment_f": 5.0,
+        "angle_offset": 0.0,
+        "frame": 12,
+    }
+
+
+def test_mavlink_source_drops_stale_obstacle_output() -> None:
+    calls = []
+    master = SimpleNamespace(
+        mav=SimpleNamespace(
+            obstacle_distance_send=lambda *args, **kwargs: calls.append(
+                (args, kwargs)
+            )
+        )
+    )
+    mavutil = SimpleNamespace(
+        mavlink=SimpleNamespace(
+            MAV_DISTANCE_SENSOR_LASER=0,
+            MAV_FRAME_BODY_FRD=12,
+            MAV_COMP_ID_OBSTACLE_AVOIDANCE=196,
+        )
+    )
+    source = MavlinkSource(
+        TelemetryStore("test"),
+        Event(),
+        "/dev/null",
+        921600,
+        obstacle_max_age_s=0.25,
+    )
+    source.queue_obstacle_scan(
+        ObstacleScan(
+            source="depth",
+            monotonic_ns=time.monotonic_ns() - 300_000_000,
+            distances_cm=tuple([UNKNOWN_DISTANCE_CM] * 72),
+            increment_deg=5.0,
+            min_distance_cm=30,
+            max_distance_cm=800,
+        )
+    )
+
+    assert not source._send_pending_obstacle(master, mavutil)
+    assert calls == []
+
+
+def test_obstacle_beep_requires_armed_vehicle_and_high_rc7() -> None:
+    tunes = []
+    master = SimpleNamespace(
+        mav=SimpleNamespace(
+            play_tune_send=lambda *args: tunes.append(args),
+        )
+    )
+    configured = load_config(ROOT / "config" / "system.yaml")
+    source = MavlinkSource(
+        TelemetryStore("test"),
+        Event(),
+        "/dev/null",
+        921600,
+        obstacle_settings=configured.obstacle_avoidance,
+    )
+    source.target_system = 1
+    source.target_component = 1
+    distances = [UNKNOWN_DISTANCE_CM] * 72
+    distances[0] = 150
+    source.queue_obstacle_scan(
+        ObstacleScan(
+            source="lidar",
+            monotonic_ns=time.monotonic_ns(),
+            distances_cm=tuple(distances),
+            increment_deg=5.0,
+            min_distance_cm=30,
+            max_distance_cm=800,
+        )
+    )
+
+    source._set_rc_toggle_pwm(1800)
+    assert not source._maybe_send_obstacle_beep(master)
+
+    source._armed = True
+    assert source._maybe_send_obstacle_beep(master)
+    assert tunes[-1][2] == OBSTACLE_BEEP_TUNE.encode("ascii")
+    assert not source._maybe_send_obstacle_beep(master)
+
+    source._set_rc_toggle_pwm(1000)
+    source._last_obstacle_beep_s = float("-inf")
+    assert not source._maybe_send_obstacle_beep(master)
+
+
+def test_startup_rising_tune_is_sent_only_once_per_process() -> None:
+    tunes = []
+    master = SimpleNamespace(
+        mav=SimpleNamespace(
+            play_tune_send=lambda *args: tunes.append(args),
+        )
+    )
+    source = MavlinkSource(
+        TelemetryStore("test"),
+        Event(),
+        "/dev/null",
+        921600,
+        startup_tune_enabled=True,
+    )
+    source.target_system = 1
+    source.target_component = 1
+
+    assert source._maybe_send_startup_tune(master)
+    assert not source._maybe_send_startup_tune(master)
+    assert len(tunes) == 1
+    assert tunes[0][2] == STARTUP_RISING_TUNE.encode("ascii")
 
 
 def test_imu_snapshot_uses_si_units_and_reports_freshness() -> None:
@@ -99,6 +322,22 @@ def test_message_interval_request_waits_for_cube_ack() -> None:
     assert result == 0
     assert master.ack_requested
     assert master.mav.command is not None
+
+
+def test_message_interval_cleanup_restores_defaults_instead_of_disabling() -> None:
+    class Mav:
+        def __init__(self) -> None:
+            self.commands = []
+
+        def command_long_send(self, *args) -> None:
+            self.commands.append(args)
+
+    master = SimpleNamespace(target_system=1, target_component=0, mav=Mav())
+
+    _restore_message_intervals(master, (30, 105))
+
+    assert [command[4] for command in master.mav.commands] == [30, 105]
+    assert [command[5] for command in master.mav.commands] == [0, 0]
 
 
 def test_legacy_optical_flow_message_keeps_pixel_and_compensated_fields() -> None:

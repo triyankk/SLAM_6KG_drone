@@ -1,0 +1,17 @@
+[Unit]
+Description=optFlow exclusive Cube UART MAVLink router
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/vscode/optFlow_slam
+ExecStart=%h/vscode/optFlow_slam/scripts/run_mavlink_router.sh
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=MAVLINK20=1
+
+[Install]
+WantedBy=default.target

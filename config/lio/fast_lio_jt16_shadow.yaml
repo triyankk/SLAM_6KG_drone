@@ -1,0 +1,55 @@
+/**:
+  ros__parameters:
+    feature_extract_enable: false
+    point_filter_num: 1
+    max_iteration: 3
+    filter_size_surf: 0.30
+    filter_size_map: 0.30
+    cube_side_length: 200.0
+    runtime_pos_log_enable: false
+    map_file_path: ""
+
+    common:
+      lid_topic: /optflow/jt16/points
+      imu_topic: /optflow/im10a/imu
+      time_sync_en: false
+      time_offset_lidar_to_imu: 0.0
+      imu_gyr_unit: rad
+
+    preprocess:
+      lidar_type: 1
+      scan_line: 16
+      timestamp_unit: 0
+      blind: 0.80
+
+    mapping:
+      acc_cov: 0.10
+      gyr_cov: 0.10
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      fov_degree: 180.0
+      det_range: 30.0
+      # The bridge aligns both sensors to body FRD. Keep this fixed during
+      # isolated translation tests: one-axis motion cannot observe a full
+      # online lidar-IMU extrinsic estimate safely.
+      extrinsic_est_en: false
+      extrinsic_T: [-0.08, 0.0, -0.01]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+    publish:
+      path_en: true
+      map_en: false
+      effect_map_en: false
+      scan_publish_en: false
+      dense_publish_en: false
+      scan_bodyframe_pub_en: false
+
+    pcd_save:
+      pcd_save_en: false
+      interval: -1
+      leaf_size: 0.10
+
+    trajectory_save:
+      tum_en: false

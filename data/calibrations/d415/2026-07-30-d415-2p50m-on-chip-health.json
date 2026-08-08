@@ -1,0 +1,26 @@
+{
+  "serial": "327322062285",
+  "target": "2.500 m wall with upward arrow",
+  "operation": "on_chip_white_wall_candidate_only",
+  "applied_to_session": false,
+  "written_to_flash": false,
+  "original_sha256": "11bb46d8dd75f87865372fc7637a71bed43b9513e7cdad6140a5e7ba6a161697",
+  "candidate_path": "data/calibrations/d415/2026-07-30-d415-2p50m-on-chip-candidate-not-applied.bin",
+  "candidate_sha256": "7368c2df99899e92133250fa23c39d22b25668ce0e14bdc3f6348b8b507ec06e",
+  "candidate_differs_from_original": true,
+  "health": [
+    -0.22563132643699646,
+    0.0
+  ],
+  "calibration_json": {
+    "calib type": 0,
+    "speed": 4,
+    "scan parameter": 0,
+    "white wall mode": 1
+  },
+  "progress_final": 100.0,
+  "previous_visual_preset": 0.0,
+  "check_visual_preset": 3.0,
+  "previous_emitter_enabled": 1.0,
+  "check_emitter_enabled": 1.0
+}

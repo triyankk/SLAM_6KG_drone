@@ -5,19 +5,28 @@ change mode, send movement targets, or publish ExternalNav.
 
 ## Before A Flight
 
-The installed `optflow-flight-logger.service` starts with the Jetson and owns
-the Cube UART and IM10A. Check it before leaving for the field:
+The passive arm-triggered logger is now a manual evidence tool. The installed
+`optflow-flight-logger.service` runs the OA-only runtime and already owns the
+Cube MAVLink endpoint and JT16. Stop it before starting this logger:
 
 ```bash
+systemctl --user stop optflow-flight-logger.service
+./optflow flight-service
 ./optflow flight-status
 ```
 
-The expected idle result is `STATE=waiting_for_arm`, `LINK=true`, and
-`ARMED=false`. No session folder or camera recording is created while disarmed.
+The SLAM shadow plays a ready tune only after LIO and RGB-D have initialized,
+then QGC displays `SLAM TEST READY: ARM IN LOITER`. This confirms the proof
+pipeline reached its readiness threshold; it does not approve active obstacle
+avoidance or autonomous control.
 
-Do not run the visualizer, standalone RGB stream, or manual logger in parallel
-with this service. The service owns `/dev/ttyTHS1` and `/dev/imu_usb`
-continuously, then claims the RealSense and JT16 UDP port only while recording.
+Before arming, the expected logger status is `STATE=waiting_for_arm` and
+`ACTIVE_CONTROL=false`.
+
+Do not run the full visualizer, standalone RGB stream, boot OA-only service,
+or another logger in parallel. The logger owns the configured Cube MAVLink endpoint and
+`/dev/imu_usb` continuously, then claims the RealSense and JT16 serial device
+while recording.
 
 ## Automatic Trigger
 
@@ -49,15 +58,18 @@ YYYYMMDDTHHMMSSZ_field-01/
   manifest.json
   telemetry.ndjson
   sensor_events.ndjson
+  sensor_timing.ndjson
   shadow_predictions.ndjson
   events.ndjson
   analysis/
     report.json
     report.md
+    slam_timing.json
     timeline.csv
   cube/
   lidar/
-    jt16_packets.pcap
+    jt16_serial.bin
+    jt16_bridge.log
   realsense/
     flight.bag
     intrinsics.json
@@ -69,10 +81,18 @@ YYYYMMDDTHHMMSSZ_field-01/
 `telemetry.ndjson` preserves Cube, H-Flow, range, IM10A, local/global position,
 GPS, power, vibration, EKF, RC, actuator, target, and timing snapshots using a
 single Jetson clock. The RealSense bag preserves the camera streams at their
-configured hardware rate. JT16 UDP payloads are wrapped in a valid raw-IP PCAP.
+configured hardware rate. The pinned official Hesai SDK decodes JT16 XYZ
+frames with per-point timestamp, ring, intensity, and confidence while the
+original serial packets are preserved in `jt16_serial.bin`.
 `sensor_events.ndjson` preserves every decoded MAVLink and IM10A event rather
 than decimating them to the visualization rate; source sequence gaps are
 recorded explicitly.
+`sensor_timing.ndjson` is the estimator timing contract. It records Jetson
+monotonic/realtime arrival clocks, D415 depth/color device timestamps and frame
+numbers, JT16 SDK callback time, frame index, and per-frame point timestamp
+ranges. IM10A and selected Cube events retain arrival time plus any available
+device time. The analyzer compares elapsed clocks without assuming that their
+epochs are equal.
 
 The merged PLY is currently a provisional telemetry-registered D415 cloud. It
 uses Cube local position when fresh and H-Flow dead reckoning otherwise. It is
@@ -98,7 +118,10 @@ MAVLink command path.
 
 ## After A Flight
 
-Wait for `STATE=waiting_for_arm`, then inspect `LAST_SESSION` and `LAST_REPORT`:
+For the first flight after boot, inspect
+`data/recordings/slam_flights/<session>/analysis/slam_flight_shadow.json`.
+For later passive flights, wait for `STATE=waiting_for_arm`, then inspect
+`LAST_SESSION` and `LAST_REPORT`:
 
 ```bash
 ./optflow flight-status
@@ -111,6 +134,18 @@ Attach the corresponding Cube DataFlash log and regenerate the report:
   --cube-log /path/to/latest.BIN
 ```
 
+Re-run only the timestamp gate with:
+
+```bash
+./optflow slam-timing data/recordings/flights/<session>
+```
+
+`analysis/slam_timing.json` reports observed rate, period distribution, jitter,
+estimated drops, frame-number gaps, relative clock drift, and explicit
+lidar-inertial replay blockers. A short disarmed capture proves acquisition
+plumbing only; it does not verify dynamic synchronization, extrinsics, IMU
+noise, or estimator accuracy.
+
 The `.BIN` file is copied into the session. Selected attitude, EKF, power,
 vibration, rate, mode, motor, event, and error messages are extracted. Logger
 attitude is aligned to DataFlash `ATT` using Cube boot time.
@@ -118,19 +153,21 @@ attitude is aligned to DataFlash `ATT` using Cube boot time.
 The first review should use:
 
 - `analysis/report.md` for coverage and summary observations;
+- `analysis/slam_timing.json` for clock, rate, jitter, and drop evidence;
 - `analysis/timeline.csv` for plots and event windows;
 - `telemetry.ndjson`, `sensor_events.ndjson`, and
   `shadow_predictions.ndjson` for exact values;
 - the DataFlash `.BIN` for high-rate flight-controller evidence;
-- `realsense/flight.bag` and `lidar/jt16_packets.pcap` for estimator replay;
+- `realsense/flight.bag` and `lidar/jt16_serial.bin` for estimator replay;
 - `pointcloud/flight_environment.ply` for a quick environment preview.
 
 ## Current Ownership
 
-The automatic logger owns `/dev/ttyTHS1` and `/dev/imu_usb`; it does not depend
-on the visualizer or an HTTP stream. It owns the D415 and UDP port 2368 only
-between arm and post-disarm finalization. For bench visualization, first stop
-the service, run the visualizer, then restart the service afterward:
+While manually active, the logger owns the configured Cube MAVLink endpoint and `/dev/imu_usb`; it
+does not depend on the visualizer or an HTTP stream. It owns the D415 and
+`/dev/jt16_usb` between arm and post-disarm finalization. The full visualizer
+owns all four devices continuously, so stop whichever hardware-owning process
+is active before switching:
 
 ```bash
 systemctl --user stop optflow-flight-logger.service
@@ -138,8 +175,8 @@ systemctl --user stop optflow-flight-logger.service
 systemctl --user start optflow-flight-logger.service
 ```
 
-Once a ROS 2 Hesai driver is active, raw lidar capture must move to the driver's
-packet or `PointCloud2` topic rather than sharing the UDP socket.
+Once a ROS 2 Hesai driver is active, raw lidar capture must move to that
+driver's packet or `PointCloud2` topic rather than sharing the serial device.
 
 The older `./optflow flight-log` command remains available for deliberately
 manual bench captures. It needs the service stopped and the visualizer running;

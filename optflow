@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${ROOT_DIR}/.venv/bin/python"
+export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
 
 usage() {
     printf '%s\n' \
@@ -14,17 +15,41 @@ usage() {
         "  test        Run Python tests and the frontend build" \
         "  preflight   Run the read-only hardware readiness probe" \
         "  sensor-check Check live IMU, RGB-depth, and JT16 data" \
+        "  obstacle-check Check D415/JT16 body-frame obstacle sectors" \
+        "  obstacle-service Run JT16-to-Cube avoidance only" \
+        "  obstacle-status Show JT16, RC7, and Cube proximity health" \
+        "  jt16-calibrate Run the guided JT16 cardinal calibration" \
+        "  jt16-plane  Validate JT16 wall/floor planes and ring correction" \
         "  camera      Start the forward RealSense RGB stream" \
         "  flight-log  Record telemetry, sensor data, and a 3D flight cloud" \
         "  flight-service Run the arm-triggered logger in the foreground" \
-        "  flight-status Show automatic flight logger state" \
+        "  flight-status Show the manual arm-triggered logger state" \
         "  analyze     Analyze a flight session and optional Cube BIN log" \
+        "  slam-timing Analyze sensor rates, jitter, drops, and clock coverage" \
+        "  im10a       Audit/apply the reversible 200 Hz timestamped IMU profile" \
+        "  imu-noise   Record and analyze a stationary IM10A noise profile" \
+        "  imu-align   Analyze IM10A timing/gyro alignment from shadow logs" \
+        "  build-lio   Build the pinned ROS 2 + Hesai FAST-LIO2 runtime" \
+        "  lio-shadow  Record JT16 + IM10A odometry without sending Cube pose" \
+        "  cube-odom-shadow Prove disarmed Cube ODOMETRY transport without EKF fusion" \
+        "  slam-poc    Run live D415 VIO + FAST-LIO mapping proof" \
+        "  slam-flight-shadow Record an armed GPS-Loiter SLAM/OA shadow flight" \
+        "  rtl-shadow  Replay a proof as shadow-only GPS-denied local return" \
+        "  slam-return Run the guarded live SLAM mapping and return runtime" \
+        "  slam-return-setup Audit the Cube and apply the 0.5 s Guided timeout" \
+        "  slam-return-status Show live return state, gates, and output status" \
+        "  prearm-status Show recent Cube PreArm/Arm telemetry errors" \
+        "  lio-validate Re-run the trajectory gate for a shadow session" \
         "  cube-mount  Inspect/apply the measured Cube mounting transform" \
-        "  lidar-network Configure the dedicated JT16 Ethernet route" \
+        "  cube-avoidance Inspect/apply Cube proximity avoidance parameters" \
+        "  lidar-status Show the JT16 serial/driver state" \
         "  build-ch341 Build the CH340/CH341 USB serial kernel driver" \
         "  install-ch341 Install the driver and IMU udev rule as root" \
+        "  build-pl2303 Build the JT16 USB-RS485 kernel driver" \
+        "  install-pl2303 Install the JT16 driver and udev rule as root" \
+        "  build-jt16  Fetch the pinned Hesai SDK and build the JT16 bridge" \
         "  install-realsense-rules Install D415 USB permissions as root" \
-        "  install-flight-service Enable the arm-triggered boot logger" \
+        "  install-flight-service Enable the boot OA-only service" \
         "  install-headless-vnc Install the reversible headless X/VNC setup" \
         "  check-headless-vnc Verify the local X display and VNC listener" \
         "  visualizer  Start the live H-Flow visualizer"
@@ -65,6 +90,28 @@ case "${command}" in
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/check_sensors.py" "$@"
         ;;
+    obstacle-check)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/check_obstacles.py" "$@"
+        ;;
+    obstacle-service)
+        require_python
+        exec "${ROOT_DIR}/scripts/run_obstacle_avoidance_service.sh" "$@"
+        ;;
+    obstacle-status)
+        require_python
+        exec "${PYTHON}" -c \
+            'from optflow_slam.obstacle_avoidance_service import status_main; raise SystemExit(status_main())' \
+            "$@"
+        ;;
+    jt16-calibrate)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/calibrate_jt16.py" "$@"
+        ;;
+    jt16-plane)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/calibrate_jt16_planes.py" "$@"
+        ;;
     camera)
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/rgb_stream.py" "$@"
@@ -86,11 +133,81 @@ case "${command}" in
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/analyze_flight.py" "$@"
         ;;
+    slam-timing)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/analyze_slam_timing.py" "$@"
+        ;;
+    im10a)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/configure_im10a.py" "$@"
+        ;;
+    imu-noise)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/calibrate_imu_noise.py" "$@"
+        ;;
+    imu-align)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/analyze_imu_alignment.py" "$@"
+        ;;
+    build-lio)
+        exec "${ROOT_DIR}/scripts/bootstrap_lio_runtime.sh" "$@"
+        ;;
+    lio-shadow)
+        require_python
+        exec "${ROOT_DIR}/scripts/run_lio_shadow.sh" "$@"
+        ;;
+    cube-odom-shadow)
+        require_python
+        exec "${ROOT_DIR}/scripts/run_lio_shadow.sh" \
+            --cube-odometry-shadow "$@"
+        ;;
+    slam-poc)
+        require_python
+        exec "${ROOT_DIR}/scripts/run_slam_poc.sh" "$@"
+        ;;
+    slam-flight-shadow)
+        require_python
+        exec "${ROOT_DIR}/scripts/run_slam_poc.sh" \
+            --flight-shadow --no-browser "$@"
+        ;;
+    rtl-shadow)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/replay_rtl_shadow.py" "$@"
+        ;;
+    slam-return)
+        require_python
+        exec "${ROOT_DIR}/scripts/run_slam_navigation_service.sh" "$@"
+        ;;
+    slam-return-setup)
+        require_python
+        exec "${PYTHON}" -m optflow_slam.slam_return_setup "$@"
+        ;;
+    slam-return-status)
+        require_python
+        exec "${PYTHON}" -c \
+            'from optflow_slam.slam_navigation_service import status_main; raise SystemExit(status_main())' \
+            "$@"
+        ;;
+    prearm-status)
+        require_python
+        exec "${PYTHON}" -c \
+            'from optflow_slam.slam_navigation_service import prearm_status_main; raise SystemExit(prearm_status_main())' \
+            "$@"
+        ;;
+    lio-validate)
+        require_python
+        exec "${PYTHON}" "${ROOT_DIR}/scripts/validate_lio.py" "$@"
+        ;;
     cube-mount)
         require_python
         exec "${PYTHON}" "${ROOT_DIR}/scripts/configure_cube_mount.py" "$@"
         ;;
-    lidar-network)
+    cube-avoidance)
+        require_python
+        exec "${PYTHON}" \
+            "${ROOT_DIR}/scripts/configure_cube_avoidance.py" "$@"
+        ;;
+    lidar-status|lidar-network)
         require_python
         exec "${PYTHON}" \
             "${ROOT_DIR}/scripts/configure_lidar_network.py" "$@"
@@ -100,6 +217,15 @@ case "${command}" in
         ;;
     install-ch341)
         exec "${ROOT_DIR}/hardware/install-ch341.sh" "$@"
+        ;;
+    build-pl2303)
+        make -C "${ROOT_DIR}/hardware/kernel/pl2303" "$@"
+        ;;
+    install-pl2303)
+        exec "${ROOT_DIR}/hardware/install-pl2303.sh" "$@"
+        ;;
+    build-jt16)
+        exec "${ROOT_DIR}/scripts/build_jt16_bridge.sh" "$@"
         ;;
     install-realsense-rules)
         exec "${ROOT_DIR}/hardware/install-realsense-rules.sh" "$@"

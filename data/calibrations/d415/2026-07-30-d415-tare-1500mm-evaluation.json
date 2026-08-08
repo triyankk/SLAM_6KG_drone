@@ -1,0 +1,36 @@
+{
+  "serial": "327322062285",
+  "ground_truth_mm": 1500.0,
+  "visual_preset": "high_accuracy",
+  "written_to_flash": false,
+  "original_restored_in_ram": true,
+  "original_sha256": "11bb46d8dd75f87865372fc7637a71bed43b9513e7cdad6140a5e7ba6a161697",
+  "candidate_path": "data/calibrations/d415/2026-07-30-d415-tare-1500mm-candidate-not-written.bin",
+  "candidate_sha256": "48f0826c0ac9bfff7b1547359ff4ada84951fb35552ca6aba15bd1a5815d148b",
+  "health": [
+    0.03261791914701462,
+    0.00042260740883648396
+  ],
+  "progress_final": 100.0,
+  "before": {
+    "samples": 90,
+    "median_m": 1.5480000972747803,
+    "min_m": 1.5440000295639038,
+    "max_m": 1.5530000925064087,
+    "error_m": 0.04800009727478027
+  },
+  "candidate_in_ram": {
+    "samples": 90,
+    "median_m": 1.5500000715255737,
+    "min_m": 1.5450000762939453,
+    "max_m": 1.5550000667572021,
+    "error_m": 0.05000007152557373
+  },
+  "restored_original": {
+    "samples": 90,
+    "median_m": 1.5510001182556152,
+    "min_m": 1.5450000762939453,
+    "max_m": 1.5550000667572021,
+    "error_m": 0.051000118255615234
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "audit": {
+    "baud": 9600,
+    "checksum_errors": 0,
+    "discarded_bytes": 10,
+    "duration_s": 0.8153001930004393,
+    "endpoint": "/dev/imu_usb",
+    "estimated_drops": 0,
+    "frame_type_counts": {
+      "0x50": 8,
+      "0x51": 8,
+      "0x52": 8,
+      "0x53": 7,
+      "0x54": 7,
+      "0x56": 7,
+      "0x59": 8
+    },
+    "lio_profile": false,
+    "output_mask_observed": 607,
+    "payload_errors": 0,
+    "sample_rate_hz": 9.812336693505099,
+    "sensor_period_median_ms": 100.0000000003638,
+    "sensor_period_p95_error_ms": 1.8189894035458565e-09,
+    "sensor_time_calendar_valid": false,
+    "sensor_time_non_monotonic": 0,
+    "valid_frames": 53
+  },
+  "captured_utc": "2026-07-31T08:59:49.977579+00:00",
+  "restore_output_mask": 607,
+  "restore_rate_hz": 10.0,
+  "schema_version": 1
+}

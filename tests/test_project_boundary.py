@@ -23,6 +23,7 @@ IGNORED_DIRECTORIES = {
     ".pytest_cache",
     ".venv",
     "__pycache__",
+    "build",
     "calibrations",
     "dist",
     "logs",
@@ -31,6 +32,7 @@ IGNORED_DIRECTORIES = {
     "recordings",
     "runtime",
     "test-output",
+    "third_party",
     "vendor",
 }
 TEXT_SUFFIXES = {

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SLAM / VIO Proof</title>
+  </head>
+  <body>
+    <main class="poc-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">OPTFLOW SLAM / SHADOW PIPELINE</p>
+          <h1>SLAM / VIO proof</h1>
+        </div>
+        <div class="safety-state">
+          <i data-lucide="shield-check"></i>
+          <span>NO CUBE POSE OUTPUT</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="scene-panel">
+          <canvas id="slamScene" aria-label="Live SLAM point map"></canvas>
+          <div class="scene-status">
+            <span id="proofStatus">STARTING PIPELINE</span>
+            <span id="sessionName">SESSION --</span>
+          </div>
+          <section id="guideBanner" class="guide-banner" data-phase="synchronizing" aria-live="assertive">
+            <div class="guide-symbol" aria-hidden="true">
+              <i data-lucide="route"></i>
+            </div>
+            <div class="guide-copy">
+              <span id="guideLabel">PREPARING</span>
+              <strong id="guideInstruction">SENSORS SYNCHRONIZING</strong>
+              <p id="guideDetail">Keep the aircraft disarmed and still.</p>
+            </div>
+            <div class="guide-readout">
+              <strong id="guideValue">0%</strong>
+              <span id="guideEstimate">SENSOR LOCK</span>
+            </div>
+            <div class="guide-progress" aria-hidden="true">
+              <i id="guideProgress"></i>
+            </div>
+          </section>
+          <div class="legend" aria-label="Map legend">
+            <span><i class="map-dot"></i>D415 MAP</span>
+            <span><i class="rgbd-line"></i>RGB-D + IMU</span>
+            <span><i class="lio-line"></i>FAST-LIO2</span>
+          </div>
+          <nav class="scene-controls" aria-label="Map controls">
+            <button id="resetView" title="Reset map camera" aria-label="Reset map camera">
+              <i data-lucide="rotate-ccw"></i>
+            </button>
+            <button id="topView" title="Top map view" aria-label="Top map view">
+              <i data-lucide="scan"></i>
+            </button>
+            <button id="followView" class="is-active" title="Follow pose" aria-label="Follow pose">
+              <i data-lucide="locate-fixed"></i>
+            </button>
+          </nav>
+        </div>
+
+        <aside class="telemetry-panel" aria-label="Proof telemetry">
+          <section class="clock-section">
+            <p class="eyebrow">ELAPSED</p>
+            <strong id="elapsedTime">00:00</strong>
+            <span id="connectionState">CONNECTING</span>
+          </section>
+
+          <section class="proof-metrics">
+            <div>
+              <span>MAP POINTS</span>
+              <strong id="mapPoints">0</strong>
+            </div>
+            <div>
+              <span>KEYFRAMES</span>
+              <strong id="keyframes">0</strong>
+            </div>
+            <div>
+              <span>VO TRACK</span>
+              <strong id="trackRatio">0%</strong>
+            </div>
+            <div>
+              <span>IMU PRIOR</span>
+              <strong id="priorRatio">0%</strong>
+            </div>
+          </section>
+
+          <section class="pipeline-list">
+            <div class="pipeline-row" data-source="rgbd">
+              <i data-lucide="camera"></i>
+              <div><strong>D415 RGB-D</strong><span id="rgbdDetail">WAITING</span></div>
+              <i class="health-light"></i>
+            </div>
+            <div class="pipeline-row" data-source="imu">
+              <i data-lucide="activity"></i>
+              <div><strong>IM10A</strong><span id="imuDetail">WAITING</span></div>
+              <i class="health-light"></i>
+            </div>
+            <div class="pipeline-row" data-source="lidar">
+              <i data-lucide="radio"></i>
+              <div><strong>JT16</strong><span id="lidarDetail">WAITING</span></div>
+              <i class="health-light"></i>
+            </div>
+            <div class="pipeline-row" data-source="lio">
+              <i data-lucide="route"></i>
+              <div><strong>FAST-LIO2</strong><span id="lioDetail">WAITING</span></div>
+              <i class="health-light"></i>
+            </div>
+          </section>
+
+          <section class="trajectory-metrics">
+            <div><span>VISUAL PATH</span><strong id="rgbdPath">0.00 m</strong></div>
+            <div><span>LIDAR PATH</span><strong id="lioPath">0.00 m</strong></div>
+            <div><span>VO COMPUTE</span><strong id="computeTime">-- ms</strong></div>
+            <div><span>DEPTH VALID</span><strong id="depthValid">--%</strong></div>
+            <div><span>RTL SHADOW</span><strong id="rtlState">WAITING</strong></div>
+            <div><span>RETURN CMD</span><strong id="rtlCommand">0.00 m/s</strong></div>
+          </section>
+
+          <section class="command-section">
+            <button id="stopProof" class="stop-command">
+              <i data-lucide="square"></i>
+              <span>Stop and save proof</span>
+            </button>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <div id="instructionFlash" class="instruction-flash" aria-hidden="true"></div>
+    <script type="module" src="/src/slam-poc.js"></script>
+  </body>
+</html>

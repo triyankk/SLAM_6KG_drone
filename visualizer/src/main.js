@@ -1,29 +1,41 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  Activity,
   Box,
   Circle,
   createIcons,
   Download,
+  Layers,
   LocateFixed,
+  Map,
   Pause,
   Play,
   RotateCcw,
+  Route,
   Scan,
   Square,
+  Trash2,
 } from "lucide";
+import { box, buildDrone } from "./drone.js";
+import { createSpatialVisualizer } from "./spatial.js";
 import "./style.css";
 
 const icons = {
+  Activity,
   Box,
   Circle,
   Download,
+  Layers,
   LocateFixed,
+  Map,
   Pause,
   Play,
   RotateCcw,
+  Route,
   Scan,
   Square,
+  Trash2,
 };
 
 const canvas = document.querySelector("#scene");
@@ -83,9 +95,17 @@ const elements = {
   recordButton: document.querySelector("#recordButton"),
   downloadButton: document.querySelector("#downloadButton"),
   displayState: document.querySelector("#displayState"),
+  motionViewButton: document.querySelector("#motionViewButton"),
+  spatialViewButton: document.querySelector("#spatialViewButton"),
+  visualCue: document.querySelector("#visualCue"),
+  visualCueMessage: document.querySelector("#visualCueMessage"),
+  visualCueDetail: document.querySelector("#visualCueDetail"),
 };
 
 createIcons({ icons });
+const app = document.querySelector("#app");
+const spatialVisualizer = createSpatialVisualizer();
+let activeWorkspace = "spatial";
 
 function displayPixelRatio() {
   const cap = window.matchMedia("(max-width: 820px)").matches ? 1.25 : 1.5;
@@ -172,150 +192,6 @@ grid.position.y = 0.003;
 grid.material.opacity = 0.56;
 grid.material.transparent = true;
 scene.add(grid);
-
-function box(width, height, depth, material) {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(width, height, depth),
-    material,
-  );
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
-}
-
-function buildDrone() {
-  const group = new THREE.Group();
-  group.name = "vehicle";
-
-  const frameMaterial = new THREE.MeshStandardMaterial({
-    color: 0x3c423f,
-    roughness: 0.38,
-    metalness: 0.62,
-  });
-  const shellMaterial = new THREE.MeshStandardMaterial({
-    color: 0xdde2df,
-    roughness: 0.28,
-    metalness: 0.42,
-  });
-  const motorMaterial = new THREE.MeshStandardMaterial({
-    color: 0x171918,
-    roughness: 0.42,
-    metalness: 0.7,
-  });
-  const rotorMaterial = new THREE.MeshStandardMaterial({
-    color: 0x8e9691,
-    transparent: true,
-    opacity: 0.44,
-    side: THREE.DoubleSide,
-    roughness: 0.35,
-    metalness: 0.55,
-  });
-
-  const body = box(0.38, 0.13, 0.3, shellMaterial);
-  body.position.y = 0.015;
-  group.add(body);
-
-  const cap = box(0.2, 0.08, 0.18, frameMaterial);
-  cap.position.set(-0.02, 0.105, 0);
-  group.add(cap);
-
-  const cubeGroup = new THREE.Group();
-  cubeGroup.name = "cube-orange";
-  const cubeBody = box(
-    0.12,
-    0.035,
-    0.1,
-    new THREE.MeshStandardMaterial({
-      color: 0xe8792f,
-      emissive: 0x4d1c08,
-      emissiveIntensity: 0.5,
-      roughness: 0.38,
-      metalness: 0.25,
-    }),
-  );
-  const cubeArrow = box(
-    0.045,
-    0.01,
-    0.018,
-    new THREE.MeshStandardMaterial({
-      color: 0xf7f8f7,
-      emissive: 0x555b58,
-      emissiveIntensity: 0.35,
-    }),
-  );
-  cubeArrow.position.set(0.045, 0.023, 0);
-  cubeGroup.add(cubeBody, cubeArrow);
-  group.add(cubeGroup);
-
-  const armLength = 0.72;
-  const armA = box(armLength, 0.045, 0.055, frameMaterial);
-  armA.rotation.y = Math.PI / 4;
-  const armB = armA.clone();
-  armB.rotation.y = -Math.PI / 4;
-  group.add(armA, armB);
-
-  const motorPositions = [
-    [0.255, 0.015, 0.255],
-    [0.255, 0.015, -0.255],
-    [-0.255, 0.015, 0.255],
-    [-0.255, 0.015, -0.255],
-  ];
-  const motorGeometry = new THREE.CylinderGeometry(0.055, 0.062, 0.085, 24);
-  const rotorGeometry = new THREE.RingGeometry(0.055, 0.205, 48);
-  for (const [x, y, z] of motorPositions) {
-    const motor = new THREE.Mesh(motorGeometry, motorMaterial);
-    motor.position.set(x, y + 0.04, z);
-    motor.castShadow = true;
-    group.add(motor);
-
-    const rotor = new THREE.Mesh(rotorGeometry, rotorMaterial);
-    rotor.rotation.x = -Math.PI / 2;
-    rotor.position.set(x, y + 0.09, z);
-    rotor.castShadow = true;
-    group.add(rotor);
-  }
-
-  const frontMarker = box(
-    0.11,
-    0.035,
-    0.18,
-    new THREE.MeshStandardMaterial({
-      color: 0xf0b44b,
-      emissive: 0x5b3a09,
-      emissiveIntensity: 0.5,
-    }),
-  );
-  frontMarker.position.set(0.22, 0.04, 0);
-  group.add(frontMarker);
-
-  const sensor = box(
-    0.12,
-    0.045,
-    0.1,
-    new THREE.MeshStandardMaterial({
-      color: 0x35d8e6,
-      emissive: 0x0b4348,
-      emissiveIntensity: 0.75,
-      roughness: 0.3,
-    }),
-  );
-  sensor.name = "hflow-sensor";
-  sensor.position.set(0, -0.1, 0);
-  group.add(sensor);
-
-  const lens = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.022, 0.027, 0.022, 24),
-    new THREE.MeshStandardMaterial({
-      color: 0x0b0d0c,
-      roughness: 0.15,
-      metalness: 0.45,
-    }),
-  );
-  lens.position.set(0, -0.13, 0);
-  group.add(lens);
-
-  return group;
-}
 
 const drone = buildDrone();
 scene.add(drone);
@@ -681,7 +557,11 @@ function updateTelemetryUi(data) {
     data.link.connected && linkAge !== null && linkAge < 1200;
 
   elements.sourceBadge.textContent =
-    data.source === "demo" ? "DEMO" : "UART";
+    data.source === "demo"
+      ? "DEMO"
+      : data.source === "slam_runtime"
+        ? "SLAM"
+        : "UART";
   const mode = vehicle.mode || "UNKNOWN";
   const forbiddenMode = ["STABILIZE", "GUIDED_NOGPS"].includes(mode);
   elements.modeBadge.textContent = mode;
@@ -1152,6 +1032,31 @@ elements.recordButton.addEventListener("click", () => {
 });
 elements.downloadButton.addEventListener("click", downloadCsv);
 
+function setWorkspace(workspace) {
+  activeWorkspace = workspace;
+  app.dataset.view = workspace;
+  const spatialActive = workspace === "spatial";
+  elements.motionViewButton.classList.toggle("is-active", !spatialActive);
+  elements.spatialViewButton.classList.toggle("is-active", spatialActive);
+  elements.motionViewButton.setAttribute(
+    "aria-pressed",
+    String(!spatialActive),
+  );
+  elements.spatialViewButton.setAttribute(
+    "aria-pressed",
+    String(spatialActive),
+  );
+  spatialVisualizer.setActive(spatialActive);
+  if (!spatialActive) resize();
+}
+
+elements.motionViewButton.addEventListener("click", () => {
+  setWorkspace("motion");
+});
+elements.spatialViewButton.addEventListener("click", () => {
+  setWorkspace("spatial");
+});
+
 const eventSource = new EventSource("/api/stream");
 eventSource.onmessage = (event) => {
   try {
@@ -1163,6 +1068,7 @@ eventSource.onmessage = (event) => {
       appendHistory(displayTelemetry);
     }
     captureRecording(latestTelemetry);
+    spatialVisualizer.ingestTelemetry(latestTelemetry);
   } catch (error) {
     console.error("Invalid telemetry payload", error);
   }
@@ -1171,6 +1077,46 @@ eventSource.onerror = () => {
   elements.linkIndicator.classList.remove("is-live");
   elements.linkIndicator.classList.add("is-stale");
   elements.linkText.textContent = "Reconnecting";
+};
+
+let lastVisualCueSequence = 0;
+let visualCueHideTimer = null;
+const visualCueSource = new EventSource("/api/cue");
+visualCueSource.onopen = () => {
+  lastVisualCueSequence = 0;
+};
+visualCueSource.onmessage = (event) => {
+  try {
+    const cue = JSON.parse(event.data);
+    const sequence = Number(cue.sequence) || 0;
+    if (!cue.active) {
+      if (sequence >= lastVisualCueSequence) {
+        if (visualCueHideTimer !== null) clearTimeout(visualCueHideTimer);
+        visualCueHideTimer = null;
+        elements.visualCue.hidden = true;
+      }
+      return;
+    }
+    if (sequence <= lastVisualCueSequence) return;
+    lastVisualCueSequence = sequence;
+    elements.visualCueMessage.textContent = cue.message || "MOVE DRONE NOW";
+    elements.visualCueDetail.textContent = cue.detail || "";
+    elements.visualCue.dataset.flashes = String(
+      Math.min(3, Math.max(1, Number(cue.flash_count) || 2)),
+    );
+    elements.visualCue.hidden = false;
+    elements.visualCue.classList.remove("is-flashing");
+    void elements.visualCue.offsetWidth;
+    elements.visualCue.classList.add("is-flashing");
+    if (visualCueHideTimer !== null) clearTimeout(visualCueHideTimer);
+    const remainingMs = Math.max(0, Number(cue.remaining_ms) || 0);
+    visualCueHideTimer = setTimeout(() => {
+      if (sequence === lastVisualCueSequence) elements.visualCue.hidden = true;
+      visualCueHideTimer = null;
+    }, remainingMs + 100);
+  } catch (error) {
+    console.error("Invalid visual cue payload", error);
+  }
 };
 
 function resize() {
@@ -1187,6 +1133,7 @@ function resize() {
   rosImuCamera.updateProjectionMatrix();
   rosImuRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   rosImuRenderer.setSize(rosWidth, rosHeight, false);
+  spatialVisualizer.resize();
 }
 
 window.addEventListener("resize", resize);
@@ -1201,13 +1148,20 @@ function animate(frameTime) {
       updateTelemetryUi(displayTelemetry);
       lastUiSequence = displayTelemetry.sequence;
     }
+  }
+  if (displayTelemetry && activeWorkspace === "motion") {
     updateScene(displayTelemetry, deltaSeconds);
     updateRosImuScene(displayTelemetry, deltaSeconds);
   }
-  if (traceDirty) drawTrace();
-  controls.update();
-  renderer.render(scene, camera);
-  rosImuRenderer.render(rosImuScene, rosImuCamera);
+  if (activeWorkspace === "motion") {
+    if (traceDirty) drawTrace();
+    controls.update();
+    renderer.render(scene, camera);
+    rosImuRenderer.render(rosImuScene, rosImuCamera);
+  } else {
+    spatialVisualizer.render(frameTime, latestTelemetry, deltaSeconds);
+  }
 }
 
+setWorkspace("spatial");
 requestAnimationFrame(animate);

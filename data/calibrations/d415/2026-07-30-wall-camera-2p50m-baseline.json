@@ -1,0 +1,41 @@
+{
+  "serial": "327322062285",
+  "wall_marker": "upward magenta arrow visually confirmed",
+  "ground_truth_from_left_imager_m": 2.5,
+  "expected_wall_distance_from_cg_m": 2.69,
+  "depth_scale_m": 0.0010000000474974513,
+  "samples": 90,
+  "center_roi_median_m": 2.533000120311044,
+  "center_roi_temporal_min_m": 2.533000120311044,
+  "center_roi_temporal_max_m": 2.533000120311044,
+  "center_roi_p10_m": 2.5210001197410747,
+  "center_roi_p90_m": 2.5510001211659983,
+  "center_roi_valid_fraction": 1.0,
+  "absolute_error_m": 0.03300012031104416,
+  "absolute_error_percent": 1.3200048124417663,
+  "plane_normal_xyz": [
+    0.019667937247964302,
+    0.05343428210868053,
+    0.9983776588746066
+  ],
+  "plane_angle_from_optical_axis_deg": 3.264130029364278,
+  "plane_fit_rmse_m": 0.007275391771774441,
+  "intrinsics": {
+    "width": 640,
+    "height": 480,
+    "fx": 601.666748046875,
+    "fy": 601.666748046875,
+    "ppx": 323.4305419921875,
+    "ppy": 243.91197204589844,
+    "model": "distortion.brown_conrady",
+    "coeffs": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "rgb_image": "data/calibrations/d415/2026-07-30-wall-camera-2p50m-arrow-roi-rgb.png",
+  "depth_image": "data/calibrations/d415/2026-07-30-wall-camera-2p50m-arrow-depth.png"
+}

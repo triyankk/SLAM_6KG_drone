@@ -20,18 +20,104 @@ from .flight_logger import (
     DEFAULT_CONFIG,
     DEFAULT_FLIGHT_ROOT,
     FlightSession,
-    LidarPacketRecorder,
+    HesaiLidarRecorder,
     RealSensePointCloudRecorder,
 )
+from .obstacles import ObstacleFusion, ObstacleScan
 from .paths import RUNTIME_DIR
 from .visualizer_server import Im10aSource, MavlinkSource, TelemetryStore
 
 
 DEFAULT_STATUS_PATH = RUNTIME_DIR / "flight_logger_status.json"
+SUPERVISOR_STATUS_PATH = RUNTIME_DIR / "flight_supervisor_status.json"
+UNCLEAN_STOP_REASON = "recovered_after_unclean_shutdown"
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def recover_stale_service_sessions(output_root: Path) -> list[Path]:
+    """Close service-owned manifests left recording after an unclean stop."""
+
+    recovered: list[Path] = []
+    for manifest_path in sorted(output_root.glob("*/manifest.json")):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            payload.get("status") != "recording"
+            or payload.get("telemetry_url") != "direct://cube-uart"
+        ):
+            continue
+
+        latest_mtime = manifest_path.stat().st_mtime
+        try:
+            latest_mtime = max(
+                (
+                    path.stat().st_mtime
+                    for path in manifest_path.parent.rglob("*")
+                    if (
+                        path.is_file()
+                        and path != manifest_path
+                        and path.relative_to(manifest_path.parent).parts[0]
+                        not in {"analysis", "cube"}
+                        and ".recovered." not in path.name
+                    )
+                ),
+                default=latest_mtime,
+            )
+        except OSError:
+            pass
+        ended_utc = datetime.fromtimestamp(
+            latest_mtime, timezone.utc
+        ).isoformat(timespec="milliseconds")
+        recovered_utc = _utc_now()
+        payload.update(
+            status="interrupted",
+            stop_reason=UNCLEAN_STOP_REASON,
+            ended_utc=ended_utc,
+            recovery={
+                "files_preserved": True,
+                "recovered_utc": recovered_utc,
+                "reason": UNCLEAN_STOP_REASON,
+            },
+        )
+        temporary = manifest_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(manifest_path)
+        recovered.append(manifest_path.parent)
+    return recovered
+
+
+def latest_service_session(
+    output_root: Path,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Return the newest service-owned session with a readable manifest."""
+
+    candidates: list[tuple[str, Path, dict[str, Any]]] = []
+    for manifest_path in sorted(output_root.glob("*/manifest.json")):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("telemetry_url") != "direct://cube-uart":
+            continue
+        candidates.append(
+            (
+                str(payload.get("started_utc") or manifest_path.parent.name),
+                manifest_path.parent,
+                payload,
+            )
+        )
+    if not candidates:
+        return None
+    _, session_path, payload = max(candidates, key=lambda item: item[0])
+    return session_path, payload
 
 
 @dataclass(frozen=True)
@@ -59,11 +145,13 @@ class ArmTriggeredRecorder:
         settings: ServiceSettings,
         *,
         disk_free_gb: Callable[[], float] | None = None,
+        obstacle_sink: Callable[[ObstacleScan], None] | None = None,
     ) -> None:
         self.config = config
         self.config_path = config_path
         self.output_root = output_root
         self.settings = settings
+        self.obstacle_sink = obstacle_sink
         self.current_session: FlightSession | None = None
         self.current_session_stop: threading.Event | None = None
         self.current_sources: list[threading.Thread] = []
@@ -192,16 +280,16 @@ class ArmTriggeredRecorder:
                     point_stride=self.settings.point_stride,
                     voxel_size_m=self.settings.voxel_size_m,
                     record_bag=self.settings.realsense_bag_enabled,
+                    obstacle_sink=self.obstacle_sink,
                 )
             )
         if self.settings.lidar_enabled:
             sources.append(
-                LidarPacketRecorder(
+                HesaiLidarRecorder(
                     session,
                     session_stop,
-                    port=self.config.lidar.udp_port,
-                    configured_lidar_ip=self.config.lidar.lidar_ip,
-                    destination_ip=self.config.lidar.jetson_ip,
+                    self.config,
+                    obstacle_sink=self.obstacle_sink,
                 )
             )
         self.current_session = session
@@ -376,6 +464,7 @@ class ArmTriggeredRecorder:
                 else {
                     "telemetry": session.telemetry.rows,
                     "sensor_events": session.sensor_events.rows,
+                    "sensor_timing": session.sensor_timing.rows,
                     "shadow_predictions": session.shadow.rows,
                 }
             ),
@@ -427,6 +516,7 @@ def _write_status(
             "external_imu_connected": snapshot["ros_imu"]["connected"],
             "external_imu_rate_hz": snapshot["ros_imu"]["sample_rate_hz"],
             "external_imu_age_ms": snapshot["ros_imu"]["age_ms"],
+            "obstacles": snapshot["obstacles"],
         },
         "power": snapshot["power"],
         "disk_free_gb": round(
@@ -498,6 +588,7 @@ def main() -> int:
         return 2
 
     args.output_root.mkdir(parents=True, exist_ok=True)
+    recovered_sessions = recover_stale_service_sessions(args.output_root)
     source_stop = threading.Event()
     service_stop = threading.Event()
     mount = config.flight_controller.cube_mount
@@ -521,19 +612,121 @@ def main() -> int:
             config.external_imu.axis_map_verification
         ),
     )
+    obstacle_settings = config.obstacle_avoidance
+    store.update(
+        "obstacles",
+        stage=obstacle_settings.stage,
+        mavlink_output_enabled=(
+            obstacle_settings.mavlink_output_enabled
+        ),
+        clearance_reference="aircraft_cg",
+        clearance_distance_metric="horizontal_xy",
+        hard_cg_clearance_m=(
+            obstacle_settings.hard_cg_clearance_m
+        ),
+        source_stale_timeout_s=(
+            obstacle_settings.source_stale_timeout_s
+        ),
+        clearance_status="unknown",
+        sector_increment_deg=(
+            obstacle_settings.sector_increment_deg
+        ),
+        rc_toggle_channel=obstacle_settings.rc_toggle.channel,
+        rc_toggle_pwm=None,
+        rc_toggle_enabled=False,
+        alert_zone="stale",
+        alert_beep_rate_hz=0.0,
+    )
+    obstacle_fusion = ObstacleFusion(obstacle_settings)
+    mavlink_source = MavlinkSource(
+        store,
+        source_stop,
+        config.flight_controller.endpoint,
+        config.flight_controller.baud,
+        source_system=(
+            config.flight_controller.companion_system_id
+        ),
+        source_component=(
+            config.flight_controller.companion_component_id
+        ),
+        obstacle_max_age_s=(
+            obstacle_settings.source_stale_timeout_s
+        ),
+        obstacle_output_enabled=(
+            obstacle_settings.mavlink_output_enabled
+        ),
+        obstacle_settings=obstacle_settings,
+        startup_tune_enabled=True,
+    )
+
+    def receive_obstacle_scan(scan: ObstacleScan) -> None:
+        obstacle_fusion.update(scan)
+        fused = obstacle_fusion.fused(monotonic_ns=scan.monotonic_ns)
+        if fused is None:
+            return
+        clearance = fused.assess_clearance(
+            obstacle_settings.hard_cg_clearance_m
+        )
+        store.update(
+            "obstacles",
+            source=fused.source,
+            valid_sector_count=fused.valid_sector_count,
+            nearest_distance_m=fused.nearest_distance_m,
+            clearance_status=clearance.status,
+            clearance_margin_m=clearance.margin_m,
+            clearance_breached=clearance.breached,
+            violating_sector_count=(
+                clearance.violating_sector_count
+            ),
+            violating_sector_angles_deg=list(
+                clearance.violating_sector_angles_deg
+            ),
+            sector_increment_deg=fused.increment_deg,
+            distances_cm=list(fused.distances_cm),
+            updated_monotonic=time.monotonic(),
+        )
+        store.publish_raw(
+            "obstacle_fusion",
+            "OBSTACLE_DISTANCE",
+            {
+                "source": fused.source,
+                "valid_sector_count": fused.valid_sector_count,
+                "nearest_distance_m": fused.nearest_distance_m,
+                "clearance": clearance.as_dict(),
+                "increment_deg": fused.increment_deg,
+                "distances_cm": list(fused.distances_cm),
+                "mavlink_output_enabled": (
+                    obstacle_settings.mavlink_output_enabled
+                ),
+            },
+        )
+        # Alerts also consume the latest scan while active MAVLink proximity
+        # output remains independently protected by the calibration gate.
+        mavlink_source.queue_obstacle_scan(fused)
+
     manager = ArmTriggeredRecorder(
         config,
         args.config,
         args.output_root,
         settings,
+        obstacle_sink=receive_obstacle_scan,
     )
+    previous_session = latest_service_session(args.output_root)
+    if previous_session is not None:
+        previous_path, previous_manifest = previous_session
+        manager.last_session = previous_path
+        manager.last_stop_reason = previous_manifest.get("stop_reason")
+        previous_report = previous_path / "analysis" / "report.json"
+        if previous_report.exists():
+            manager.last_report = previous_report
+    if recovered_sessions:
+        print(
+            "Recovered interrupted flight session: "
+            f"{recovered_sessions[-1]}",
+            flush=True,
+        )
     sources: list[threading.Thread] = [
-        MavlinkSource(
-            store,
-            source_stop,
-            config.flight_controller.endpoint,
-            config.flight_controller.baud,
-        ),
+        mavlink_source,
         Im10aSource(
             store,
             source_stop,
@@ -618,6 +811,31 @@ def status_main() -> int:
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
     try:
+        supervisor = json.loads(
+            SUPERVISOR_STATUS_PATH.read_text(encoding="utf-8")
+        )
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
+            encoding="ascii"
+        ).strip()
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        supervisor = {}
+        boot_id = ""
+    supervisor_state = str(supervisor.get("state", ""))
+    if (
+        supervisor.get("boot_id") == boot_id
+        and supervisor_state
+        in {"shadow_starting", "shadow_waiting_for_flight", "failed"}
+    ):
+        if args.as_json:
+            print(json.dumps(supervisor, indent=2, sort_keys=True))
+            return 0
+        print(f"STATE={supervisor_state}")
+        print("MODE=SLAM_SHADOW_QGC_GUIDED")
+        print("ACTIVE_CONTROL=false")
+        print(f"REPORT={supervisor.get('report') or '-'}")
+        print(f"ERROR={supervisor.get('error') or '-'}")
+        return 0
+    try:
         payload = json.loads(args.status_file.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
         print(f"Flight logger status unavailable: {exc}")
@@ -632,6 +850,51 @@ def status_main() -> int:
     print(f"SESSION={payload.get('current_session') or '-'}")
     print(f"LAST_SESSION={payload.get('last_session') or '-'}")
     print(f"LAST_REPORT={payload.get('last_report') or '-'}")
+    obstacles = payload.get("sensors", {}).get("obstacles", {})
+    print(f"OBSTACLE_STAGE={obstacles.get('stage', 'unknown')}")
+    print(
+        "OBSTACLE_OUTPUT="
+        f"{str(bool(obstacles.get('mavlink_output_enabled'))).lower()}"
+    )
+    print(f"OBSTACLE_SOURCE={obstacles.get('source') or '-'}")
+    print(f"OBSTACLE_AGE_MS={obstacles.get('age_ms')}")
+    print(
+        "OBSTACLE_NEAREST_M="
+        f"{obstacles.get('nearest_distance_m')}"
+    )
+    print(
+        "CG_CLEARANCE_LIMIT_M="
+        f"{obstacles.get('hard_cg_clearance_m')}"
+    )
+    print(
+        "CG_CLEARANCE_STATUS="
+        f"{obstacles.get('clearance_status', 'unknown')}"
+    )
+    print(
+        "CG_CLEARANCE_MARGIN_M="
+        f"{obstacles.get('clearance_margin_m')}"
+    )
+    print(
+        "OBSTACLE_RC_CHANNEL="
+        f"{obstacles.get('rc_toggle_channel')}"
+    )
+    print(f"OBSTACLE_RC_PWM={obstacles.get('rc_toggle_pwm')}")
+    print(
+        "OBSTACLE_RC_ENABLED="
+        f"{str(bool(obstacles.get('rc_toggle_enabled'))).lower()}"
+    )
+    print(
+        "OBSTACLE_ALERT_ZONE="
+        f"{obstacles.get('alert_zone', 'inactive')}"
+    )
+    print(
+        "OBSTACLE_BEEP_RATE_HZ="
+        f"{obstacles.get('alert_beep_rate_hz', 0.0)}"
+    )
+    print(
+        "STARTUP_TUNE_SENT="
+        f"{str(bool(obstacles.get('startup_tune_sent'))).lower()}"
+    )
     print(f"DISK_FREE_GB={payload.get('disk_free_gb')}")
     print(f"ERROR={payload.get('last_error') or '-'}")
     return 0

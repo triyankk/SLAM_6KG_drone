@@ -1,0 +1,9 @@
+ 30/07 18:07:08,380 ERROR [281473240449248] (handle-libusb.h:53) failed to open usb interface: 0, error: RS2_USB_STATUS_ACCESS
+ 30/07 18:07:08,381 ERROR [281473289155680] (uvc-sensor.cpp:428) acquire_power failed: failed to set power state
+ 30/07 18:07:08,383 ERROR [281473289155680] (d400-factory.cpp:1167) Failed to create device for PID 0x0ad3! (failed to set power state)
+ 30/07 18:07:08,397 ERROR [281473248903392] (handle-libusb.h:53) failed to open usb interface: 0, error: RS2_USB_STATUS_ACCESS
+ 30/07 18:07:08,397 ERROR [281473289155680] (uvc-sensor.cpp:428) acquire_power failed: failed to set power state
+ 30/07 18:07:08,398 ERROR [281473289155680] (rs.cpp:280) [rs2_create_device( info_list:0xaaaafda930a0, index:0 ) UNKNOWN] failed to set power state
+ 30/07 18:07:08,398 ERROR [281473289155680] (rs.cpp:280) [rs2_delete_device( device:nullptr ) UNKNOWN] null pointer passed for argument "device"
+Could not create device - failed to set power state . Check SDK logs for details
+No device detected. Is it plugged in?
