@@ -1,16 +1,17 @@
 [Unit]
-Description=optFlow JT16 obstacle-avoidance-only runtime
+Description=optFlow exclusive Cube UART MAVLink router
 After=default.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/vscode/optFlow_slam
-ExecStart=%h/vscode/optFlow_slam/scripts/run_obstacle_avoidance_service.sh
+ExecStart=%h/vscode/optFlow_slam/scripts/run_mavlink_router.sh
 Restart=always
-RestartSec=3
+RestartSec=2
 KillSignal=SIGTERM
-TimeoutStopSec=20
+TimeoutStopSec=10
 Environment=PYTHONUNBUFFERED=1
+Environment=MAVLINK20=1
 
 [Install]
 WantedBy=default.target
